@@ -132,13 +132,14 @@ class TtLlamaDecoder_galaxy:
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
+        cache_idxs: List[ttnn.Tensor],
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         mode="decode",
     ) -> ttnn.Tensor:
         self.decoder_config = self.model_config["decoder"][mode]
         if mode == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, attn_masks)
         elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
@@ -149,6 +150,7 @@ class TtLlamaDecoder_galaxy:
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
+        cache_idxs: List[ttnn.Tensor],
         attn_masks: List[ttnn.Tensor],
     ) -> List[ttnn.Tensor]:
         attn_norm_out = tt_sharded_distributed_rmsnorm(
@@ -162,7 +164,7 @@ class TtLlamaDecoder_galaxy:
         )
 
         attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
-        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
+        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, cache_idxs, attn_masks, mode="decode")
         attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
 
         output = xs

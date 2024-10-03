@@ -45,6 +45,7 @@ class TTArgs:
     emulated: bool = False
     cache_path: str = None
     decode_only: bool = False
+    trace_mode: bool = False
 
 
 @dataclass
@@ -108,7 +109,14 @@ def run_demo(args):
     # Run decode
     with torch.no_grad():
         all_text = run_decode(
-            model_args, tt_args, data_args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts
+            model_args,
+            tt_args,
+            data_args,
+            model=model,
+            tokenizer=tokenizer,
+            prompt_tokens=tokenized,
+            prompts=prompts,
+            trace_mode=tt_args.trace_mode,
         )
 
         if data_args.output_at_end:
@@ -218,6 +226,7 @@ def run_decode(
     prompts,
     return_logits=False,
     return_full_logits=False,
+    trace_mode=False,
 ):
     """
     return_logits: return the logits for the last token
@@ -249,11 +258,23 @@ def run_decode(
     # some profiling and logging
     latencies = []
     full_logits = []
+    trace_id = None
 
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+        is_decode = input_tokens.shape[1] == 1
+        if trace_mode and is_decode and trace_id is None:
+            logger.info("Capturing trace")
+            trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(tokens[:, 0:1], prev_pos)
+        elif trace_mode and is_decode:
+            logits = model.decode_forward_trace(
+                input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+            )
+        else:  # prefill or no tracing
+            if trace_id is not None:
+                model.delete_trace(trace_id)
+            logits = model.forward(input_tokens, prev_pos)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)
@@ -289,6 +310,11 @@ def run_decode(
     elif return_full_logits:
         full_logits = torch.cat(full_logits, dim=1)
         output = (output, full_logits)
+
+    # delete trace
+    if trace_id is not None:
+        model.delete_trace(trace_id)
+
     return output
 
 
@@ -370,6 +396,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion"),
 )
+@pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
@@ -409,6 +436,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("short_context", "long_context"),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 16720448}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -427,6 +455,7 @@ def test_LlamaModel_demo(
     cluster_shape,
     n_devices,
     decode_only,
+    trace_mode,
     llama_version,
     ground_truth,
     max_batch_size,
@@ -469,6 +498,7 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        trace_mode=trace_mode,
         ground_truth=ground_truth,
     )
     run_demo(args)
