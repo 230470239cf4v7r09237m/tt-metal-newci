@@ -16,7 +16,6 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
     get_single_rot_mat,
     sample,
-    cache_attention,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
@@ -126,19 +125,11 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         tt_model.mesh_device,
+        model_args.rot_mat_grid_range,
     )
 
     generation_start_pos = 0
     max_generated_tokens = 50  # max_seq_len-1
-
-    cache_attention(
-        mesh_device,
-        state_dict,
-        model_args,
-        current_rot_mat,
-        rot_matrix,
-        dtype,
-    )
 
     logger.info("Starting inference...")
 

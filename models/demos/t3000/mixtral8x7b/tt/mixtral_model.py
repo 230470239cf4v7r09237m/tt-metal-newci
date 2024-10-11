@@ -64,14 +64,16 @@ class TtTransformer(LightweightModule):
             self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos_ids)
         else:
             self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
-                self.args.head_dim, mesh_device, start_pos_ids
+                self.args.head_dim,
+                mesh_device,
+                start_pos_ids,
+                self.args.rot_mat_grid_range,
             )
 
     def forward(
         self,
         x,
         start_pos_ids,
-        attn_masks=None,
         rot_mats=None,
         transformation_mats=None,
         user_id=0,
@@ -91,9 +93,7 @@ class TtTransformer(LightweightModule):
                 else:
                     rot_mats = self.current_rot_mat
 
-            x = layer(x, start_pos_ids, attn_masks, rot_mats, transformation_mats, user_id, mode)
-        if attn_masks is not None:
-            attn_masks.deallocate(True)
+            x = layer(x, start_pos_ids, rot_mats, transformation_mats, user_id, mode)
 
         if mode == "prefill" and get_last_token == -1:
             return x
@@ -123,7 +123,10 @@ class TtTransformer(LightweightModule):
             if (start_pos_ids[0] + 1) % 32 == 0:
                 # generate new rotmat to avoid numerical instability every 32 tokens
                 self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
-                    self.args.head_dim, self.mesh_device, [pos + 1 for pos in start_pos_ids]
+                    self.args.head_dim,
+                    self.mesh_device,
+                    [pos + 1 for pos in start_pos_ids],
+                    self.args.rot_mat_grid_range,
                 )
             else:
                 # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
