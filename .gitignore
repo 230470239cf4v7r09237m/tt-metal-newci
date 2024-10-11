@@ -5,6 +5,7 @@ runtime
 *.log
 *.csv
 *.xlsx
+*.env
 /tt-perf*
 test_hlk_args_init_gen
 tt_build
