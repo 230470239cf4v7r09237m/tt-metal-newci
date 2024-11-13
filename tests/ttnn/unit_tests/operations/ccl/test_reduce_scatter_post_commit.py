@@ -635,10 +635,8 @@ def test_width_sharded_reduce_scatter_post_commit(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
-    "num_devices, num_links",
-    [
-        (4, 2),
-    ],
+    "num_devices",
+    [4],
 )
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize(
@@ -657,7 +655,7 @@ def test_width_sharded_reduce_scatter_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape,output_shard_shape,shard_grid,in_shard_override,in_shard_grid_override",
+    "per_chip_output_shape,output_shard_shape,shard_grid,in_shard_override,in_shard_grid_override,num_links",
     (
         # LLama
         (
@@ -666,6 +664,7 @@ def test_width_sharded_reduce_scatter_post_commit(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
             (32, 160),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
+            2,
         ),
         (
             (1, 1, 32, 1280),
@@ -673,6 +672,15 @@ def test_width_sharded_reduce_scatter_post_commit(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
             None,
             None,
+            2,
+        ),
+        (
+            (1, 1, 32, 320),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+            None,
+            None,
+            1,
         ),
     ),
 )
@@ -720,6 +728,7 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
         topology=topology,
         enable_async=enable_async,
         num_iters=num_iters,
+        n_worker=2,
     )
 
 

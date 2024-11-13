@@ -352,9 +352,9 @@ void kernel_main() {
     auto args = reduce_scatter_reader_common_args_t(arg_idx, get_dataformat(cb_id_in0));
     auto output_partial_signal_ready_receiver = signal_receiver<is_line_reduce_scatter>::build(args.requires_last_input_from_other_sender, arg_idx);
 
-    auto s = build_source_address_generator<input_tensor_memory_layout, src_is_dram>(arg_idx, args, args.input_tensor_addr);
+    auto source_paged_address_generator = build_source_address_generator<input_tensor_memory_layout, src_is_dram>(arg_idx, args, args.input_tensor_addr);
 
-    auto d = build_dest_address_generator<output_tensor_memory_layout, dest_is_dram>(arg_idx, args, args.output_tensor_addr);
+    auto destination_paged_address_generator = build_dest_address_generator<output_tensor_memory_layout, dest_is_dram>(arg_idx, args, args.output_tensor_addr);
 
 
     bool width_sliced = args.tensor_slice_shape.x <= args.input_tensor_shape.x;
@@ -379,7 +379,8 @@ void kernel_main() {
     // For RM => shape in elements
     std::size_t n_reads = 1;
     uint32_t start_ring_index = args.my_ring_idx;
-    while (args.worker_slice_offset.x < args.tensor_slice_shape.x &&
+    const bool work_to_do = args.tensor_slice_shape.x > 0 && args.tensor_slice_shape.y > 0;
+    while (work_to_do && args.worker_slice_offset.x < args.tensor_slice_shape.x &&
            args.worker_slice_offset.y < args.tensor_slice_shape.y) {
         // Need to reset back to the start ring index because the last iteration of the tranfers read chunks
         // loop won't increment after the last iteration since the increment is within the loop body
@@ -422,9 +423,9 @@ void kernel_main() {
             // only the first chip in the line will forward and input without producing a partial reduction
             // output. Therefore we don't do this short-circuit when that mode is enabled
             uint32_t offset_into_worker_slice = 0;
-            for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
+            for (uint32_t page_offset = 0; page_offset < worker_slice_n_pages; page_offset += args.full_chunk_num_pages) {
 
-                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
+                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - page_offset);
                 ASSERT(args.half_cb_n_pages >= n_pages);
                 ASSERT(!last_page_of_worker);
                 read_wrapped_chunk_from_output_tensor(
@@ -436,7 +437,7 @@ void kernel_main() {
                     args.input_tensor_shape,
                     args.tensor_slice_shape,
                     to_dm_sender_short_circuit_cb,
-                    s,
+                    source_paged_address_generator,
                     n_pages,
                     args.page_size,
                     last_page_of_worker);
@@ -445,7 +446,7 @@ void kernel_main() {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
                     push_filler_pages_to_cb(to_dm_sender_short_circuit_cb, num_filler_pages);
                     ASSERT(args.half_cb_n_pages > n_pages);
-                    ASSERT(p + n_pages == worker_slice_n_pages);
+                    ASSERT(page_offset + n_pages == worker_slice_n_pages);
                     total_cb_pages_pushed += num_filler_pages;
                 }
             }
@@ -466,8 +467,8 @@ void kernel_main() {
             last_page_of_worker = false;
             curr_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
 
-            for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
-                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
+            for (uint32_t page_offset = 0; page_offset < worker_slice_n_pages; page_offset += args.full_chunk_num_pages) {
+                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - page_offset);
                 ASSERT(args.half_cb_n_pages >= n_pages);
                 ASSERT(n_pages > 0);
                 // Fetch from input tensor
@@ -489,14 +490,14 @@ void kernel_main() {
                         args.input_tensor_shape,
                         args.tensor_slice_shape,
                         cb_id_in1,
-                        s,
+                        source_paged_address_generator,
                         n_pages,
                         args.page_size,
                         last_page_of_worker);
                 }
 
                 // Fetch from EDM
-                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
+                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (page_offset + n_pages >= worker_slice_n_pages);
                 reader.wait_for_payload_available();
                 reader.fetch_payload_blocking(cb_id_in0, n_pages, args.page_size, last_worker_message_to_edm);
 
@@ -520,7 +521,7 @@ void kernel_main() {
                         args.tensor_slice_shape, // output tensor shape
                         args.tensor_slice_shape,
                         cb_id_in1,
-                        d,
+                        destination_paged_address_generator,
                         n_pages,
                         args.page_size,
                         last_page_of_worker);
@@ -556,6 +557,8 @@ void kernel_main() {
         push_filler_pages_to_cb(cb_id_in1, 1);
     }
 
-    reader.close();
+    if (work_to_do) {
+        reader.close();
+    }
     WAYPOINT("DONE");
 }
