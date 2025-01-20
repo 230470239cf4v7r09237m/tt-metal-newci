@@ -83,7 +83,7 @@ def get_device():
     if total_devices == 1:
         device = "N150"
     elif total_devices == 2:
-        device = "N150"
+        device = "N300"
     elif total_devices == 8:
         device = "T3K"
     else:  # TG has 36 devices
