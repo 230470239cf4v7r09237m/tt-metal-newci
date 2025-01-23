@@ -248,7 +248,7 @@ class TtTransformer(LightweightModule):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor
         """
-        if self.args.num_devices > 1:
+        if self.args.num_devices_tp > 1:
             if self.args.is_galaxy:
                 tt_out = ttnn.all_gather(
                     tt_out,
@@ -261,7 +261,7 @@ class TtTransformer(LightweightModule):
             else:
                 tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=self.args.ccl_topology())
         tt_out = ttnn.untilize(tt_out, use_multicore=True)
-        if self.args.num_devices > 1:
+        if self.args.num_devices_tp > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()

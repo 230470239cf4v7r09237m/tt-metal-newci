@@ -27,7 +27,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -169,7 +169,7 @@ class TtLlamaAttention(LightweightModule):
 
         # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim, configuration.qkv_size // configuration.num_devices
+            configuration.dim, configuration.qkv_size // configuration.num_devices_tp
         )
 
         qkv_list = []
@@ -206,7 +206,7 @@ class TtLlamaAttention(LightweightModule):
         pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim // configuration.num_devices, configuration.dim
+            configuration.dim // configuration.num_devices_tp, configuration.dim
         )
 
         self.wo = ttnn.as_tensor(
@@ -393,7 +393,7 @@ class TtLlamaAttention(LightweightModule):
             values = self.layer_past[1]
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
+        # keys, [max_batch_size, n_kv_heads // configuration.num_devices_tp, max_seq_len, head_dim]
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
