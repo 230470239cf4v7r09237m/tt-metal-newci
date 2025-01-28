@@ -126,7 +126,7 @@ class TtModelArgs:
         ]  # this might not be the best, but targeting base TP should be OK start
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
-        self.max_batch_size = max_batch_size // data_parallel
+        self.max_batch_size = max_batch_size  # // data_parallel
         self.per_chip_batch_dim = data_parallel
         self.tile_size = 32
         self.is_70b = False
@@ -604,7 +604,7 @@ class TtModelArgs:
                 else self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
-                    n=self.qkv_size // self.num_devices_tp,
+                    n=self.qkv_size // max(self.num_devices_tp, self.num_devices_dp // self.max_batch_size),
                     num_cores=attn_input_grid.num_cores,
                 )
             )
@@ -905,9 +905,7 @@ class TtModelArgs:
             dims = (2, None)
         else:
             dims = (None, None) if force_replicated else (None, -1)
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device, dims=dims, mesh_shape=self.cluster_shape
-        )  # DP: shard on batch
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         if len(x.shape) == 3:
             batch = x.shape[0]

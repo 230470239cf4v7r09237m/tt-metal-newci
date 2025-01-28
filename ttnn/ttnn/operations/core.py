@@ -626,6 +626,12 @@ def as_tensor(
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
             storage_type = f"_multi_device" if mesh_mapper else ""
         elif mesh_mapper:
+            if isinstance(mesh_mapper, ttnn.ShardTensor2dMesh):
+                if mesh_mapper.dims == (None, None):
+                    storage_type = f"_multi_device_1"
+            if isinstance(mesh_mapper, ttnn.ShardTensorToMesh):
+                if mesh_mapper.dim == None:
+                    storage_type = f"_multi_device_1"
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
