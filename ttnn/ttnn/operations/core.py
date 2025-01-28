@@ -629,10 +629,13 @@ def as_tensor(
             if isinstance(mesh_mapper, ttnn.ShardTensor2dMesh):
                 if mesh_mapper.dims == (None, None):
                     storage_type = f"_multi_device_1"
-            if isinstance(mesh_mapper, ttnn.ShardTensorToMesh):
-                if mesh_mapper.dim == None:
+                else:
+                    storage_type = f"_multi_device_{device.get_num_devices()}"
+            elif isinstance(mesh_mapper, ttnn.ShardTensorToMesh):
+                if mesh_mapper.shard_dim == None:
                     storage_type = f"_multi_device_1"
-            storage_type = f"_multi_device_{device.get_num_devices()}"
+                else:
+                    storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
 

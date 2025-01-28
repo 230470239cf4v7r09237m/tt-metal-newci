@@ -14,10 +14,7 @@ from models.demos.llama3.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_pcc, comp_allclose, skip_for_batch_parallelism, skip_for_parallelism
 from models.utility_functions import skip_for_grayskull
 
 
@@ -48,16 +45,23 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
+    "batch_dp_tp",
+    [
+        # (32, 1, 1),
+        # (64, 2, 1),
+        # (2, 1, 2),
+        # (2, 2, 1),
+        (4, 2, 1)
+    ],
+    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (4096,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_llama_attention_inference(
     max_seq_len,
-    batch_size,
+    batch_dp_tp,
     paged_attention,
     page_params,
     mesh_device,
@@ -65,12 +69,31 @@ def test_llama_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
+    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+
+    skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
+    if skip:
+        pytest.skip(reason)
+    skip, reason = skip_for_parallelism(
+        mesh_device.get_num_devices() if mesh_device else 0, data_parallel, tensor_parallel
+    )
+    if skip:
+        pytest.skip(reason)
+
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
     mesh_device.enable_async(True)
+    if data_parallel > 1:
+        mesh_device.reshape(ttnn.MeshShape(mesh_device.get_num_devices(), 1))
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        data_parallel=data_parallel,
+        tensor_parallel=tensor_parallel,
+        max_seq_len=max_seq_len,
+    )
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
 
     state_dict = model_args.load_state_dict()
@@ -99,6 +122,8 @@ def test_llama_attention_inference(
         model_args.rope_theta,
         model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
+        ttnn.bfloat16,
+        data_parallel > 1,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -117,7 +142,8 @@ def test_llama_attention_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.max_batch_size // data_parallel,
+            paged_attention_config.max_num_blocks // (model_args.max_batch_size // data_parallel),
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -152,7 +178,7 @@ def test_llama_attention_inference(
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size // data_parallel)])
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
@@ -168,12 +194,27 @@ def test_llama_attention_inference(
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
         pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
 
+        # Fixed input for debug
+        # low, high = -1.5, 1.5
+
+        # base_tensor = torch.empty(seq_len, model_args.dim).uniform_(low, high)
+
+        # # Scale it to have the desired standard deviation (e.g., 0.04) and mean 0
+        # base_tensor -= base_tensor.mean()  # Ensure mean is 0
+        # desired_std = 0.04
+        # base_tensor *= desired_std / base_tensor.std()
+
+        # pt_attention_input = base_tensor.unsqueeze(0).expand(batch_size // data_parallel, -1, -1)
+        # if data_parallel > 1:
+        #     pt_attention_input = pt_attention_input.repeat(2, 1, 1)
+
         tt_attention_input = pt_attention_input.clone()
 
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
             model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,
+            data_parallel=data_parallel,
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -189,8 +230,16 @@ def test_llama_attention_inference(
         # multi-device attention module returns replicated output
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=((2, 1) if data_parallel > 1 else (1, 3)), mesh_shape=model_args.cluster_shape
+            ),
         )
+        if data_parallel > 1 and model_args.max_batch_size // data_parallel < 32:
+            padded_batch = torch.chunk(tt_out, data_parallel, 2)
+            unpad_batch = []
+            for chunk in padded_batch:
+                unpad_batch.append(chunk[:, :, : model_args.max_batch_size // data_parallel, :])
+            tt_out = torch.cat(unpad_batch, 2)
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position (if using batch > 1)
@@ -209,7 +258,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size // data_parallel)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
@@ -230,30 +279,66 @@ def test_llama_attention_inference(
             ]
             # TT hardware execution -------------------------------------------------------------
             if paged_attention:
-                tt_layer_present = [
-                    (
-                        ttnn.to_torch(
+                if data_parallel > 1:
+                    tt_layer_present = []
+                    for cache in tt_model.layer_past:
+                        gather_layer = ttnn.to_torch(
                             cache,
                             mesh_composer=ttnn.ConcatMesh2dToTensor(
                                 mesh_device,
                                 dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                 mesh_shape=model_args.cluster_shape,
                             ),
-                        )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                        .reshape(
-                            model_args.max_batch_size,
-                            paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                            model_args.n_kv_heads,
-                            paged_attention_config.block_size,
-                            model_args.head_dim,
                         )
-                        .transpose(1, 2)
-                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                            :batch_size, ...
-                        ]
-                    )
-                    for cache in tt_model.layer_past
-                ]
+                        split_gather = torch.chunk(gather_layer, data_parallel, 0)
+                        tmp = []
+                        for layer in split_gather:
+                            t = (
+                                layer[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                                .reshape(
+                                    model_args.max_batch_size // data_parallel,
+                                    paged_attention_config.max_num_blocks
+                                    // (model_args.max_batch_size // data_parallel),
+                                    model_args.n_kv_heads,
+                                    paged_attention_config.block_size,
+                                    model_args.head_dim,
+                                )
+                                .transpose(1, 2)
+                                .reshape(
+                                    (model_args.max_batch_size // data_parallel),
+                                    model_args.n_kv_heads,
+                                    -1,
+                                    model_args.head_dim,
+                                )[: (model_args.max_batch_size // data_parallel), ...]
+                            )
+                            tmp.append(t)
+                        tt_layer_present.append(torch.cat(tmp, dim=0))
+
+                else:
+                    tt_layer_present = [
+                        (
+                            ttnn.to_torch(
+                                cache,
+                                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                    mesh_device,
+                                    dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                    mesh_shape=model_args.cluster_shape,
+                                ),
+                            )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                            .reshape(
+                                model_args.max_batch_size // data_parallel,
+                                paged_attention_config.max_num_blocks // (model_args.max_batch_size // data_parallel),
+                                model_args.n_kv_heads,
+                                paged_attention_config.block_size,
+                                model_args.head_dim,
+                            )
+                            .transpose(1, 2)
+                            .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                :batch_size, ...
+                            ]
+                        )
+                        for cache in tt_model.layer_past
+                    ]
             else:
                 tt_layer_present = [
                     ttnn.to_torch(

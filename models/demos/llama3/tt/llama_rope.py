@@ -134,17 +134,12 @@ class TtLlamaRotarySetup(LightweightModule):
         pad_size = nearest_32(batch) - batch
         position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
 
-        mesh_mapper = (
-            ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=list(self.device.shape))
-            if self.data_parallel
-            else ReplicateTensorToMesh(self.device)
-        )
         if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper if self.is_mesh_device else None,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -153,7 +148,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper if self.is_mesh_device else None,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
 
         return rot_idxs
