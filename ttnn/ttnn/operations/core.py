@@ -623,19 +623,12 @@ def as_tensor(
             ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
-        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
+        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh) or (
+            isinstance(mesh_mapper, ttnn.ShardTensor2dMesh) and (mesh_mapper.dims == (None, None))
+        ):
             storage_type = f"_multi_device" if mesh_mapper else ""
         elif mesh_mapper:
-            if isinstance(mesh_mapper, ttnn.ShardTensor2dMesh):
-                if mesh_mapper.dims == (None, None):
-                    storage_type = f"_multi_device_1"
-                else:
-                    storage_type = f"_multi_device_{device.get_num_devices()}"
-            elif isinstance(mesh_mapper, ttnn.ShardTensorToMesh):
-                if mesh_mapper.shard_dim == None:
-                    storage_type = f"_multi_device_1"
-                else:
-                    storage_type = f"_multi_device_{device.get_num_devices()}"
+            storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
 

@@ -143,6 +143,7 @@ class TtLlamaAttention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
+        dims = (None, None) if self.data_parallel else (2, 3)
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -150,11 +151,7 @@ class TtLlamaAttention(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(None, None), mesh_shape=configuration.cluster_shape
-            )
-            if self.data_parallel
-            else ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+                self.mesh_device, dims=(3, 2) if self.TG else dims, mesh_shape=configuration.cluster_shape
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
@@ -166,9 +163,10 @@ class TtLlamaAttention(LightweightModule):
         pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim // self.num_devices, configuration.dim
+            configuration.dim // configuration.num_devices_tp, configuration.dim
         )
 
+        dims = (None, None) if self.data_parallel else (3, 2)
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
@@ -177,13 +175,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, None),
-                mesh_shape=configuration.cluster_shape,
-            )
-            if self.data_parallel
-            else ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else dims,
                 mesh_shape=configuration.cluster_shape,
             ),
             cache_file_name=(
