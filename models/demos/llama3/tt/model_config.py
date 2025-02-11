@@ -1058,14 +1058,14 @@ class TtModelArgs:
         if "_name_or_path" in params:
             self.model_name = os.path.basename(params["_name_or_path"])
 
-        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices_tp not in [0, 2, 4]:
             raise AssertionError(
                 "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use FAKE_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
-        if self.num_devices:
+        if self.num_devices_tp:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
                 "Qwen2.5-72B": 32,
@@ -1078,7 +1078,7 @@ class TtModelArgs:
             # Only pad if MLP_PADDED_CORES is non-zero
             if mlp_padded_cores > 0:
                 padded_hidden_dim = nearest_multiple(
-                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices_tp
                 )
                 if padded_hidden_dim != self.hidden_dim:
                     logger.info(

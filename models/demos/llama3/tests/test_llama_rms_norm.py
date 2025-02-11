@@ -31,27 +31,33 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
     ],
     indirect=True,
 )
+# @pytest.mark.parametrize(
+#     "batch_dp_tp",
+#     [
+#         (1, 1, 8),
+#         (8, 8, 1),
+#         (1, 1, 2),
+#         (32, 2, 1),
+#         (64, 2, 1),
+#         (32, 1, 2),
+#         (64, 1, 2),
+#         (2, 2, 1),
+#     ],
+#     ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+# )
 @pytest.mark.parametrize(
-    "batch_dp_tp",
-    [
-        (1, 1, 8),
-        (8, 8, 1),
-        (1, 1, 2),
-        (32, 2, 1),
-        (64, 2, 1),
-        (32, 1, 2),
-        (64, 1, 2),
-        (2, 2, 1),
-    ],
-    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+    "batch_size",
+    (1,),
 )
+@pytest.mark.parametrize("dp", [True, False])
 @pytest.mark.parametrize(
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_llama_rms_norm_inference(
-    batch_dp_tp,
+    batch_size,
+    dp,
     max_seq_len,
     mode,
     mesh_device,
@@ -59,7 +65,9 @@ def test_llama_rms_norm_inference(
     reset_seeds,
     ensure_gc,
 ):
-    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+    batch_size = batch_size * mesh_device.get_num_devices() if dp else batch_size
+    data_parallel = mesh_device.get_num_devices() if dp else 1
+    tensor_parallel = mesh_device.get_num_devices() if not dp else 1
 
     skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
     if skip:

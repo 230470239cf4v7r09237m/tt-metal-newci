@@ -35,9 +35,9 @@ class TtLlamaMLP(LightweightModule):
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices_tp, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
-        as_sharded_tensor = lambda name, type, dims: ttnn.as_tensor(
+        as_sharded_tensor = lambda name, type, dims, pad_dims: ttnn.as_tensor(
             pad_hidden_dim(
-                torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1]
+                torch_weight(name[:2]), pad_dims[0] if args.is_galaxy else pad_dims[-1]
             ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
@@ -54,22 +54,35 @@ class TtLlamaMLP(LightweightModule):
         # Sharded weights
         if args.num_devices_dp > 1:
             assert args.num_devices_tp == 1, "Hybrid parallelism not supported"
-            w1_dim = (None, None)
-            w2_dim = (None, None)
+            w1_dims = (None, None)
+            w2_dims = (None, None)
+
+            w1_pad_dims = (-2, -1)
+            w2_pad_dims = (-1, -2)
         else:  # tensor parallel
             assert args.num_devices_dp == 1, "Hybrid parallelism not supported"
             if args.is_galaxy:
-                w1_dim = (-1, -2)
-                w2_dim = (-2, -1)
+                w1_dims = (-1, -2)
+                w2_dims = (-2, -1)
             else:
-                w1_dim = (-2, -1)
-                w2_dim = (-1, -2)
+                w1_dims = (-2, -1)
+                w2_dims = (-1, -2)
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims
+            "w1_sharded",
+            ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b,
+            dims=w1_dims,
+            pad_dims=w1_dims if not args.num_devices_dp > 1 else w1_pad_dims,
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims)
+        self.w2 = as_sharded_tensor(
+            "w2_sharded", ttnn.bfloat8_b, dims=w2_dims, pad_dims=w2_dims if not args.num_devices_dp > 1 else w2_pad_dims
+        )
+        self.w3 = as_sharded_tensor(
+            "w3_sharded",
+            ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b,
+            dims=w1_dims,
+            pad_dims=w1_dims if not args.num_devices_dp > 1 else w1_pad_dims,
+        )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
