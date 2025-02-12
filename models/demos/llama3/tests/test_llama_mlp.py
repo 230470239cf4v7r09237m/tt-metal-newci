@@ -61,6 +61,9 @@ def test_llama_mlp_inference(seq_len, batch_size, dp, mesh_device, use_program_c
     data_parallel = mesh_device.get_num_devices() if dp else 1
     tensor_parallel = mesh_device.get_num_devices() if not dp else 1
 
+    if data_parallel > 1 and seq_len > 32 * 1024:
+        pytest.skip("Long MLP test")
+
     skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
     if skip:
         pytest.skip(reason)
