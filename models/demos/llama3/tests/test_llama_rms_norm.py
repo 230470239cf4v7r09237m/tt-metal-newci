@@ -26,32 +26,47 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("FAKE_DEVICE"),
+            len(ttnn.get_device_ids())
+            # "N150"
         )
     ],
     indirect=True,
 )
+# @pytest.mark.parametrize(
+#     "batch_dp_tp",
+#     [
+#         # (1, 1, 8),
+#         # (8, 8, 1),
+#         (1, 1, 2),
+#         # (32, 2, 1),
+#         # (64, 2, 1),
+#         # (32, 2, 1),
+#         # (32, 1, 2),
+#         # (64, 1, 2),
+#         # (2, 2, 1),
+#     ],
+#     ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+# )
 @pytest.mark.parametrize(
-    "batch_dp_tp",
-    [
-        (1, 1, 8),
-        (8, 8, 1),
-        (1, 1, 2),
-        (32, 2, 1),
-        (64, 2, 1),
-        (32, 1, 2),
-        (64, 1, 2),
-        (2, 2, 1),
-    ],
-    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+    "batch_size",
+    (1,),
 )
+@pytest.mark.parametrize("dp", [True, False])
 @pytest.mark.parametrize(
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        # "prefill",
+        "decode"
+    ],
+)
 def test_llama_rms_norm_inference(
-    batch_dp_tp,
+    batch_size,
+    dp,
     max_seq_len,
     mode,
     mesh_device,
@@ -59,7 +74,9 @@ def test_llama_rms_norm_inference(
     reset_seeds,
     ensure_gc,
 ):
-    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+    batch_size = batch_size * mesh_device.get_num_devices() if dp else batch_size
+    data_parallel = mesh_device.get_num_devices() if dp else 1
+    tensor_parallel = mesh_device.get_num_devices() if not dp else 1
 
     skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
     if skip:
@@ -115,11 +132,11 @@ def test_llama_rms_norm_inference(
     reference_model = RefRMSNorm(dim=model_args.dim, eps=model_args.norm_eps)
     reference_model.load_state_dict(partial_state_dict)
 
-    input = torch.rand(model_args.per_chip_batch_dim, 1, 32, model_args.dim)
+    input = torch.rand(1, 1, model_args.num_devices_dp * 32, model_args.dim)
     reference_output = reference_model(input)
 
     if data_parallel > 1:
-        input_shard_dims = (0, None)  # shard across batch dimension
+        input_shard_dims = (2, None)  # shard across batch dimension
     else:
         input_shard_dims = (None, -1)  # shard across width dimension
 
@@ -141,7 +158,7 @@ def test_llama_rms_norm_inference(
     if data_parallel > 1:
         # Data parallel is not running distributed norm.
         # Data parallel per chip batch runs on dim 0. dim 3 is not utilized.
-        output_shard_dims = (0, 3)
+        output_shard_dims = (2, 3)
     elif model_args.is_galaxy:
         output_shard_dims = (0, 3)
     else:

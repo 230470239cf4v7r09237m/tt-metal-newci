@@ -39,7 +39,7 @@ class TtLlamaRotarySetup(LightweightModule):
         if self.num_devices == 32:
             self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
         else:
-            self.batch_size_per_device_group = self.batch_size // self.num_devices if data_parallel else self.batch_size
+            self.batch_size_per_device_group = self.batch_size
 
         self.data_parallel = data_parallel
         self.core_grid = device.compute_with_storage_grid_size()
@@ -70,9 +70,7 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-        batch_grid = ttnn.num_cores_to_corerangeset(
-            self.batch_size_per_device_group if self.data_parallel else batch_size, self.core_grid, row_wise=True
-        )
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -89,7 +87,6 @@ class TtLlamaRotarySetup(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-        dims = (2, None) if self.data_parallel else (None, None)
         self.transformation_mat = ttnn.from_torch(
             trans_mat,
             device=device,
@@ -98,7 +95,7 @@ class TtLlamaRotarySetup(LightweightModule):
             memory_config=trans_mat_mem_config,
             mesh_mapper=ShardTensor2dMesh(
                 device,
-                dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else dims,
+                dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
                 mesh_shape=list(device.shape),
             )
             if self.is_mesh_device
@@ -131,15 +128,28 @@ class TtLlamaRotarySetup(LightweightModule):
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
         # Add padding if needed
-        pad_size = nearest_32(batch) - batch
-        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+        pad_size = nearest_32(self.batch_size) - self.batch_size
+        if self.data_parallel and pad_size > 0:
+            mesh_mapper = ttnn.ShardPaddedTensorToMesh(self.device, -1, pad_size=pad_size)
+        else:
+            position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+
+            mesh_mapper = (
+                ttnn.ShardTensor2dMesh(
+                    self.device,
+                    dims=(-1, None),
+                    mesh_shape=list(self.device.shape),
+                )
+                if self.data_parallel
+                else ReplicateTensorToMesh(self.device)
+            )
 
         if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=mesh_mapper if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -148,7 +158,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=mesh_mapper if self.is_mesh_device else None,
             )
 
         return rot_idxs
@@ -181,9 +191,7 @@ class TtLlamaRotarySetup(LightweightModule):
             cos = cos[:, : self.batch_size_per_device_group, :, :]
             sin = sin[:, : self.batch_size_per_device_group, :, :]
 
-        grid = ttnn.num_cores_to_corerangeset(
-            self.batch_size_per_device_group if self.data_parallel else self.batch_size, self.core_grid, row_wise=True
-        )
+        grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
             core_grid=grid,

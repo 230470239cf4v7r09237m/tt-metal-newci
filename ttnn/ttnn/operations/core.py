@@ -626,6 +626,7 @@ def as_tensor(
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh) or (
             isinstance(mesh_mapper, ttnn.ShardTensor2dMesh) and (mesh_mapper.dims == (None, None))
         ):
+            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_mapper.mesh_device)  # TODO: move logic to Shard class?
             storage_type = f"_multi_device" if mesh_mapper else ""
         elif mesh_mapper:
             storage_type = f"_multi_device_{device.get_num_devices()}"

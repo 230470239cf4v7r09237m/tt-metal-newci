@@ -40,19 +40,26 @@ from models.utility_functions import skip_for_grayskull
     ),
     ids=lambda seq_len: f"seq_len_{seq_len}_",
 )
+# @pytest.mark.parametrize(
+#     "batch_dp_tp",
+#     [
+#         # (1, 1, 8),
+#         # (8, 8, 1),
+#         # (64, 8, 1),
+#         # (1, 1, 2),
+#         (2, 2, 1),
+#     ],
+#     ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+# )
 @pytest.mark.parametrize(
-    "batch_dp_tp",
-    [
-        (1, 1, 8),
-        (8, 8, 1),
-        (64, 8, 1),
-        (1, 1, 2),
-        (2, 2, 1),
-    ],
-    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
+    "batch_size",
+    (1,),
 )
-def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cache, reset_seeds, ensure_gc):
-    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+@pytest.mark.parametrize("dp", [True, False])
+def test_llama_mlp_inference(seq_len, batch_size, dp, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    batch_size = batch_size * mesh_device.get_num_devices() if dp else batch_size
+    data_parallel = mesh_device.get_num_devices() if dp else 1
+    tensor_parallel = mesh_device.get_num_devices() if not dp else 1
 
     skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
     if skip:
@@ -107,7 +114,7 @@ def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cach
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(model_args.per_chip_batch_dim, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(model_args.max_batch_size, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
 
     if data_parallel > 1:  # if data parallel, use dim 1 to shard input

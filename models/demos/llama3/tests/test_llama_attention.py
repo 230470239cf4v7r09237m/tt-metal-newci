@@ -125,7 +125,7 @@ def test_llama_attention_inference(
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
         mesh_device,
-        batch_size,
+        model_args.device_chunk_batch_size,
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
@@ -151,8 +151,8 @@ def test_llama_attention_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size // data_parallel,
-            paged_attention_config.max_num_blocks // (model_args.max_batch_size // data_parallel),
+            model_args.device_chunk_batch_size,
+            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -187,14 +187,15 @@ def test_llama_attention_inference(
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size // data_parallel)])
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
+    dims = (0, None) if data_parallel > 1 else (None, None)
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -243,11 +244,11 @@ def test_llama_attention_inference(
                 mesh_device, dims=((2, 1) if data_parallel > 1 else (1, 3)), mesh_shape=model_args.cluster_shape
             ),
         )
-        if data_parallel > 1 and model_args.max_batch_size // data_parallel < 32:
+        if data_parallel > 1 and model_args.device_chunk_batch_size < 32:
             padded_batch = torch.chunk(tt_out, data_parallel, 2)
             unpad_batch = []
             for chunk in padded_batch:
-                unpad_batch.append(chunk[:, :, : model_args.max_batch_size // data_parallel, :])
+                unpad_batch.append(chunk[:, :, : model_args.device_chunk_batch_size, :])
             tt_out = torch.cat(unpad_batch, 2)
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
@@ -267,14 +268,15 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size // data_parallel)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
+        dims = (0, None) if data_parallel > 1 else (None, None)
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -305,20 +307,19 @@ def test_llama_attention_inference(
                             t = (
                                 layer[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                                 .reshape(
-                                    model_args.max_batch_size // data_parallel,
-                                    paged_attention_config.max_num_blocks
-                                    // (model_args.max_batch_size // data_parallel),
+                                    model_args.device_chunk_batch_size,
+                                    paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
                                     model_args.n_kv_heads,
                                     paged_attention_config.block_size,
                                     model_args.head_dim,
                                 )
                                 .transpose(1, 2)
                                 .reshape(
-                                    (model_args.max_batch_size // data_parallel),
+                                    model_args.device_chunk_batch_size,
                                     model_args.n_kv_heads,
                                     -1,
                                     model_args.head_dim,
-                                )[: (model_args.max_batch_size // data_parallel), ...]
+                                )[: model_args.device_chunk_batch_size, ...]
                             )
                             tmp.append(t)
                         tt_layer_present.append(torch.cat(tmp, dim=0))
@@ -335,8 +336,8 @@ def test_llama_attention_inference(
                                 ),
                             )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                             .reshape(
-                                model_args.max_batch_size // data_parallel,
-                                paged_attention_config.max_num_blocks // (model_args.max_batch_size // data_parallel),
+                                model_args.max_batch_size,
+                                paged_attention_config.max_num_blocks // model_args.max_batch_size,
                                 model_args.n_kv_heads,
                                 paged_attention_config.block_size,
                                 model_args.head_dim,

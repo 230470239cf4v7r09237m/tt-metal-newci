@@ -114,24 +114,50 @@ def gather_cos_sin(position_ids, cos, sin):
 
 def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, scale_factor, start_pos=0):
     cos, sin = precompute_freqs(head_dim, max_seq_len * 2, scale_factor=scale_factor)
-    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
-    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
-    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
 
-    cos_gathereds = ttnn.from_torch(
-        cos_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    sin_gathereds = ttnn.from_torch(
-        sin_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    if isinstance(seq_len, list):
+        cos_list = []
+        sin_list = []
+        for s in seq_len:
+            cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + s), cos, sin)
+            assert cos_gathered.size() == (1, 1, s, head_dim)
+            assert sin_gathered.size() == (1, 1, s, head_dim)
+            cos_list.append(cos_gathered)
+            sin_list.append(sin_gathered)
+
+        cos_gathereds = ttnn.from_torch(
+            torch.cat(cos_list, dim=2),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.SplitTensorToMesh(mesh_device, dim=2, sections=seq_len),
+        )
+        sin_gathereds = ttnn.from_torch(
+            torch.cat(sin_list, dim=2),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.SplitTensorToMesh(mesh_device, dim=2, sections=seq_len),
+        )
+    else:
+        cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+        assert cos_gathered.size() == (1, 1, seq_len, head_dim)
+        assert sin_gathered.size() == (1, 1, seq_len, head_dim)
+
+        cos_gathereds = ttnn.from_torch(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        sin_gathereds = ttnn.from_torch(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     rot_mats = [cos_gathereds, sin_gathereds]
     return rot_mats
@@ -273,29 +299,42 @@ def sample_top_p(probs: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
+def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True, data_parallel=False):
     vocab_size = tt_input.shape[-1]
     if mesh_device:
         pt_input = ttnn.to_torch(
             tt_input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(2, 1) if data_parallel else (1, -1), mesh_shape=list(mesh_device.shape)
+            ),  # TODO: DP concat on batch
         )[:, :1, :, :vocab_size]
     else:  # input already on host
         pt_input = tt_input[..., :vocab_size]
 
-    if temperature > 0:
+    if temperature > 0:  # TODO: DP
         probs = torch.softmax(pt_input / temperature, dim=-1)
         pt_out = sample_top_p(probs.squeeze(), top_p)
         if mesh_device:
             pt_out = pt_out.view(1, 1, 1, -1)
     else:
         if mesh_device:
-            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
+            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(
+                -1, -2
+            )  # TODO: DP will need to be separate for batch
         else:
             pt_out = torch.argmax(pt_input, dim=-1)
 
     if mesh_device is None:
         return pt_out
+    mesh_mapper = (
+        ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(3, None),
+            mesh_shape=list(mesh_device.shape),
+        )
+        if data_parallel
+        else ttnn.ReplicateTensorToMesh(mesh_device)
+    )
     if on_host:
         return (
             ttnn.as_tensor(
@@ -303,7 +342,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.uint32,
                 device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None,
+                mesh_mapper=mesh_mapper if mesh_device.get_num_devices() > 1 else None,
             ),
             pt_out,
         )
@@ -314,7 +353,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.uint32,
                 device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=mesh_mapper,
             ),
             pt_out,
         )

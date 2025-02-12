@@ -515,15 +515,16 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused,
-            self.mesh_device,
-            cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.ccl_dtype,
-        )
+        if not self.data_parallel:
+            xqkv_fused = tt_all_reduce(
+                xqkv_fused,
+                self.mesh_device,
+                cluster_axis=1,
+                num_reduce_scatter_links=self.num_reduce_scatter_links,
+                num_all_gather_links=self.num_all_gather_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.ccl_dtype,
+            )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -697,7 +698,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        if not self.use_fused_all_gather_matmul:
+        if not self.use_fused_all_gather_matmul and not self.data_parallel:
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,

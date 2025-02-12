@@ -126,8 +126,11 @@ class TtModelArgs:
         ]  # this might not be the best, but targeting base TP should be OK start
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
-        self.max_batch_size = max_batch_size  # // data_parallel
-        self.per_chip_batch_dim = data_parallel
+
+        # depending of the parallelism type cumulative batch size and size of the batch assigned to one device may differ
+        self.max_batch_size = max_batch_size  # cumulative batch size
+        self.device_chunk_batch_size = max_batch_size // data_parallel  # batch size on one device
+
         self.tile_size = 32
         self.is_70b = False
 
@@ -229,9 +232,7 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
         self.dummy_weights = dummy_weights
-        self.tile_padded_batch_rows = self.tile_size * int(
-            math.ceil((self.max_batch_size / self.num_devices_dp) / self.tile_size)
-        )
+        self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.device_chunk_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
@@ -384,7 +385,7 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
-                k=self.dim // self.cluster_shape[0],
+                k=self.dim // (self.cluster_shape[0] if self.num_devices_tp > 1 else 1),
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=(
                     (8, min(min(seq_len, 1024) // 32, 4)) if self.is_galaxy else ((8, 8) if seq_len >= 1024 else (8, 4))
@@ -892,7 +893,7 @@ class TtModelArgs:
     def ccl_topology(self):
         if self.num_devices_tp == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
             return ttnn.Topology.Ring
-        elif self.num_devices_tp > 1:  # All other multi chip devices
+        elif self.num_devices_tp * self.num_devices_dp > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
         return None
 
@@ -927,11 +928,14 @@ class TtModelArgs:
             if batch < 32 * data_parallel:
                 zeros = torch.zeros(1, seq_len, 32, self.dim)
                 if data_parallel > 1:
-                    padded_batch = []
-                    for chunk in torch.chunk(x, data_parallel, 2):
-                        zeros[:, :, : (batch // data_parallel), :] = chunk
-                        padded_batch.append(zeros.clone())
-                    x = torch.cat(padded_batch, dim=2)
+                    # padded_batch = []
+                    # for chunk in torch.chunk(x, data_parallel, 2):
+                    #     zeros[:, :, : (batch // data_parallel), :] = chunk
+                    #     padded_batch.append(zeros.clone())
+                    # x = torch.cat(padded_batch, dim=2)
+                    mesh_mapper = ttnn.ShardPaddedTensorToMesh(
+                        self.mesh_device, dim=2, pad_size=32 - (batch / data_parallel)
+                    )
                 else:
                     zeros[:, :, :batch, :] = x
                     x = zeros
@@ -954,7 +958,7 @@ class TtModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False, data_parallel=1, sections=[]):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)
@@ -962,11 +966,24 @@ class TtModelArgs:
         S: sequence len
         H: dim
         """
+        # DP assert batch == num_devices_dp
+        # input_batch = len(x_bsh) if isinstance(x_bsh, list) else x_bsh.shape[0]
+        # assert input_batch == data_parallel, f"Batch size != {data_parallel} "
 
-        x_1BSH = x_bsh.unsqueeze(0)
-        dims = (None, None) if force_replicated else (None, -1)
+        if isinstance(x_bsh, list):
+            x_bsh = torch.cat(x_bsh, 1)
+        x_1BSH = x_bsh.unsqueeze(1)
+        # print(x_1BSH.shape)
+        if data_parallel > 1:
+            dims = (0, None)
+        else:
+            dims = (None, None) if force_replicated else (None, -1)
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = (
+            ttnn.SplitTensorToMesh(self.mesh_device, 2, sections)
+            if len(sections) > 1
+            else ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        )  # DP: shard on batch
 
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
@@ -977,6 +994,7 @@ class TtModelArgs:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
+        # ttnn.visualize_mesh_device(self.mesh_device, tensor=xs_1BSH)
         return xs_1BSH
 
     def _set_llama_params_from_dict(self, params):

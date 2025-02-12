@@ -17,6 +17,8 @@ from .distributed import (
     ShardTensorToMesh,
     ShardTensor2dMesh,
     ReplicateTensorToMesh,
+    SplitTensorToMesh,
+    ShardPaddedTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,
     ListMeshToTensor,

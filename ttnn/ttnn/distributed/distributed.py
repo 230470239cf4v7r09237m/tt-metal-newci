@@ -243,6 +243,48 @@ class MeshToTensor:
         raise NotImplementedError("Subclasses must implement this method")
 
 
+class SplitTensorToMesh(TensorToMesh):
+    def __init__(self, mesh_device, dim, sections):
+        super().__init__(mesh_device)
+        self.shard_dim = dim
+        self.sections = sections
+
+    def map(self, tensor: "torch.Tensor") -> Dict[int, ttnn.Tensor]:
+        import torch
+
+        sliced_tensors = torch.split(tensor, split_size_or_sections=self.sections, dim=self.shard_dim)
+        return list(sliced_tensors)
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dim}",
+        }
+
+
+class ShardPaddedTensorToMesh(TensorToMesh):
+    def __init__(self, mesh_device, dim, pad_size):
+        super().__init__(mesh_device)
+        self.shard_dim = dim
+        self.pad_size = pad_size
+
+    def map(self, tensor: "torch.Tensor") -> Dict[int, ttnn.Tensor]:
+        import torch
+        import torch.nn.functional as F
+
+        sliced_tensors = [
+            F.pad(chunk, (0, self.pad_size), "constant", 0)
+            for chunk in torch.chunk(tensor, self.mesh_device.get_num_devices(), dim=self.shard_dim)
+        ]
+        return list(sliced_tensors)
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dim}",
+        }
+
+
 class ShardTensorToMesh(TensorToMesh):
     def __init__(self, mesh_device, dim):
         super().__init__(mesh_device)
