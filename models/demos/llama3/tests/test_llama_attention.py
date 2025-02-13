@@ -53,11 +53,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "batch_dp_tp",
     [
-        # (32, 1, 1),
+        (32, 32, 1),
+        # (1, 1, 1),
         # (64, 2, 1),
         # (2, 1, 2),
         # (2, 2, 1),
-        (4, 2, 1)
+        # (4, 2, 1)
     ],
     ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
@@ -216,7 +217,7 @@ def test_llama_attention_inference(
 
         # pt_attention_input = base_tensor.unsqueeze(0).expand(batch_size // data_parallel, -1, -1)
         # if data_parallel > 1:
-        #     pt_attention_input = pt_attention_input.repeat(2, 1, 1)
+        #     pt_attention_input = pt_attention_input.repeat(data_parallel, 1, 1)
 
         tt_attention_input = pt_attention_input.clone()
 

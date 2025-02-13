@@ -28,7 +28,7 @@ class TtLlamaAttention(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = max(configuration.num_devices_tp, configuration.num_devices_dp)
-        self.TG = self.num_devices == 32
+        self.TG = configuration.num_devices_tp == 32
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim

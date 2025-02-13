@@ -59,10 +59,7 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
 )
 @pytest.mark.parametrize(
     "mode",
-    [
-        # "prefill",
-        "decode"
-    ],
+    ["prefill", "decode"],
 )
 def test_llama_rms_norm_inference(
     batch_size,

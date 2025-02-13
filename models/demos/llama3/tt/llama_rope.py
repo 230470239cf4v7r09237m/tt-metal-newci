@@ -36,7 +36,10 @@ class TtLlamaRotarySetup(LightweightModule):
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-        if self.num_devices == 32:
+
+        self.is_galaxy_tp = self.num_devices == 32 and not data_parallel
+
+        if self.is_galaxy_tp:
             self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
         else:
             self.batch_size_per_device_group = self.batch_size
@@ -95,7 +98,7 @@ class TtLlamaRotarySetup(LightweightModule):
             memory_config=trans_mat_mem_config,
             mesh_mapper=ShardTensor2dMesh(
                 device,
-                dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                dims=(None, 2) if (self.is_galaxy_tp and batch_size > 1) else (None, None),
                 mesh_shape=list(device.shape),
             )
             if self.is_mesh_device
@@ -130,7 +133,7 @@ class TtLlamaRotarySetup(LightweightModule):
         # Add padding if needed
         pad_size = nearest_32(self.batch_size) - self.batch_size
         if self.data_parallel and pad_size > 0:
-            mesh_mapper = ttnn.ShardPaddedTensorToMesh(self.device, -1, pad_size=pad_size)
+            mesh_mapper = ttnn.ShardPaddedTensorToMesh(self.device, -1, pad_size=int(pad_size))
         else:
             position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
 

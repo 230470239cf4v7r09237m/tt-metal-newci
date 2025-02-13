@@ -98,6 +98,8 @@ def test_llama_attention_inference(
     pcc = 0.99
 
     mesh_device.enable_async(True)
+    if data_parallel > 1:
+        mesh_device.reshape(ttnn.MeshShape(mesh_device.get_num_devices(), 1))
 
     model_args = TtModelArgs(
         mesh_device,

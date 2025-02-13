@@ -273,7 +273,7 @@ class ShardPaddedTensorToMesh(TensorToMesh):
         import torch.nn.functional as F
 
         sliced_tensors = [
-            F.pad(chunk, (0, self.pad_size), "constant", 0)
+            F.pad(chunk, (0, 0, 0, self.pad_size), "constant", 0)
             for chunk in torch.chunk(tensor, self.mesh_device.get_num_devices(), dim=self.shard_dim)
         ]
         return list(sliced_tensors)

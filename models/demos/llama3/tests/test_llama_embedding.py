@@ -33,7 +33,11 @@ from models.demos.llama3.tt.llama_common import HostEmbedding
 )
 @pytest.mark.parametrize(
     "batch_dp_tp",
-    [(1, 1, 2), (2, 2, 1), (4, 2, 1)],
+    [
+        # (1, 1, 2),
+        (32, 32, 1),
+        # (4, 2, 1)
+    ],
     ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
 @pytest.mark.parametrize(

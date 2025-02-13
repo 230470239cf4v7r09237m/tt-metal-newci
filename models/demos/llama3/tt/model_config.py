@@ -434,7 +434,9 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (
+                self.n_kv_heads // self.cluster_shape[1]
+            )  # TG TP bug ZeroDivisionError: division by zero
             self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
@@ -934,7 +936,7 @@ class TtModelArgs:
                     #     padded_batch.append(zeros.clone())
                     # x = torch.cat(padded_batch, dim=2)
                     mesh_mapper = ttnn.ShardPaddedTensorToMesh(
-                        self.mesh_device, dim=2, pad_size=32 - (batch / data_parallel)
+                        self.mesh_device, dim=2, pad_size=32 - (batch // data_parallel)
                     )
                 else:
                     zeros[:, :, :batch, :] = x
