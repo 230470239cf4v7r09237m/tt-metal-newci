@@ -52,12 +52,13 @@ class TtTransformer(LightweightModule):
 
         self.rope_setup = TtLlamaRotarySetup(
             mesh_device,
-            args.max_batch_size,
+            args.device_chunk_batch_size,
             args.head_dim,
             args.max_seq_len,
             args.rope_theta,
             args.use_scaled_rope,
             args.rope_scaling_factor,
+            data_parallel=args.num_devices_dp > 1,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -178,7 +179,13 @@ class TtTransformer(LightweightModule):
             tokens.view(-1),
             device=None,
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(0, None),
+                mesh_shape=self.args.cluster_shape,
+            )
+            if self.args.num_devices_dp > 1
+            else ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
@@ -327,6 +334,7 @@ class TtTransformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        sections=None,
     ):
         # No-op if callers already provide the right memory config
         if mode == "decode" and not self.args.is_galaxy:
@@ -350,7 +358,28 @@ class TtTransformer(LightweightModule):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            if isinstance(get_last_token, list):
+                x = ttnn.to_torch(
+                    x,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=2),
+                )
+                x = [
+                    section[:, :, get_last_token[idx] : get_last_token[idx] + 32, :]
+                    for idx, section in enumerate(torch.split(x, split_size_or_sections=sections, dim=2))
+                ]
+                x = torch.cat(x, dim=0)
+                x = ttnn.from_torch(
+                    x,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.args.cluster_shape
+                    ),
+                )
+            else:
+                x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode)

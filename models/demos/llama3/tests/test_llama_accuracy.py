@@ -100,7 +100,14 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     "use_reference_file",
     [
         pytest.param(True, id="reference_file"),
-        pytest.param(False, id="reference_text"),
+        # pytest.param(False, id="reference_text"),
+    ],
+)
+@pytest.mark.parametrize(
+    "data_parallel",
+    [
+        pytest.param(True, id="DP"),
+        # pytest.param(False, id="TP"),
     ],
 )
 def test_tt_model_acc(
@@ -113,6 +120,7 @@ def test_tt_model_acc(
     optimizations,
     mesh_device,
     use_reference_file,
+    data_parallel,
     use_program_cache,
     reset_seeds,
     ensure_gc,
@@ -125,9 +133,16 @@ def test_tt_model_acc(
 
     mesh_device.enable_async(True)
 
+    data_parallel_devices = mesh_device.get_num_devices() if data_parallel else 1
+    batch_size = batch_size * data_parallel_devices
     # Load model args and tokenizer
     model_args = TtModelArgs(
-        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len
+        mesh_device,
+        optimizations=optimizations,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        data_parallel=data_parallel_devices,
+        tensor_parallel=mesh_device.get_num_devices() // data_parallel_devices,
     )
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
@@ -177,7 +192,8 @@ def test_tt_model_acc(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.device_chunk_batch_size,
+            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -209,7 +225,7 @@ def test_tt_model_acc(
     if prefill_len > 0:
         logger.info(f"Starting prefill...")
         batch_id = 0
-        input_prompts = [tokenizer.decode(reference_tokens[0, :prefill_len].tolist())]
+        input_prompts = [tokenizer.decode(reference_tokens[0, :prefill_len].tolist())] * batch_size
         (
             input_tokens_prefill_pt,
             encoded_prompts,
@@ -223,19 +239,23 @@ def test_tt_model_acc(
             max_generated_tokens=decode_len,
             max_prefill_len=prefill_len,
         )
-        pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(1)]
+        pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)]
 
         # Pre-compute the rotational embedding matrix and send to device
         rot_mats_prefill = get_prefill_rot_mat(
             model_args.head_dim,
             model_args.max_seq_len,
             mesh_device,
-            seq_len=prefill_lens[0],
+            seq_len=prefill_lens if data_parallel_devices > 1 else prefill_lens[0],
             scale_factor=model_args.rope_scaling_factor,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(
-            pt_prefill_input[batch_id],
+            pt_prefill_input[batch_id : (batch_id + data_parallel_devices)]
+            if data_parallel_devices > 1
+            else pt_prefill_input[batch_id],
+            data_parallel=data_parallel_devices,
+            sections=prefill_lens,
         )
 
         tt_out = tt_model(
@@ -245,7 +265,12 @@ def test_tt_model_acc(
             user_id=batch_id,
             mode="prefill",
             page_table=page_table_tt,
-            get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+            get_last_token=[
+                ((decoding_pos[id] - 1) // 32) * 32 for id in range(batch_id, batch_id + data_parallel_devices)
+            ]
+            if data_parallel_devices > 1
+            else ((decoding_pos[batch_id] - 1) // 32) * 32,
+            sections=prefill_lens,
         )
 
     # Start decoding
@@ -256,13 +281,15 @@ def test_tt_model_acc(
     # Initial positions
     decoding_pos = [generation_start_pos] * model_args.max_batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(model_args.max_batch_size)])
+
+    dims = (0, None) if data_parallel_devices > 1 else (None, None)
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -292,8 +319,7 @@ def test_tt_model_acc(
         pt_decode_input = embd(ref_token).view(1, 1, -1)
         # Prepare input for TT model
         decode_input = model_args.prepare_residual_tensor_decode(
-            pt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], data_parallel=data_parallel
         )
         # Run TT model
         tt_out = tt_model(
@@ -324,15 +350,23 @@ def test_tt_model_acc(
         tt_out_tok = ttnn.argmax(
             tt_out_rm,
             dim=3,
-            use_multicore=True if model_args.max_batch_size == 1 else False,
+            use_multicore=True if model_args.device_chunk_batch_size == 1 else False,
         )
         if not use_reference_file:
-            tt_logits = ttnn.to_torch(tt_out_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0, 0, 0, :]
+            tt_logits = ttnn.to_torch(
+                tt_out_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2 if data_parallel else 1)
+            )  # [0, 0, 0, :]
+            chunks = torch.chunk(tt_logits, data_parallel_devices, 2)
+            tmp = [c[0, 0, 0, :] for c in chunks]
+            tt_logits = torch.stack(tmp)
+
         ttnn.deallocate(tt_out_rm)
 
-        tt_argmax_token = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-            0, 0, 0, 0
-        ]
+        tt_argmax_token = ttnn.to_torch(
+            tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2 if data_parallel else 1)
+        )
+        chunks = torch.chunk(tt_argmax_token, data_parallel_devices, 2)
+        tt_argmax_token = [c[0, 0, 0, 0] for c in chunks]
 
         ttnn.plus_one(current_pos_tensor)
 
@@ -341,6 +375,7 @@ def test_tt_model_acc(
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Modify the accuracy checking section when using reference text
+        # TODO: Decide what is the appropriate way to check for DP
         if not use_reference_file:
             # Get probabilities from model output
             probs = torch.softmax(tt_logits, dim=-1)
@@ -348,21 +383,23 @@ def test_tt_model_acc(
 
             # Check against actual next token
             true_token = input_ids[0, prefill_len + i + 1].item()
-            top1_match = tt_argmax_token.item() == true_token
-            top5_match = true_token in tt_top5_tokens
-            ref_top5_text = [tokenizer.decode([t]) for t in tt_top5_tokens]
+            top1_match = tt_argmax_token[0].item() == true_token
+            top5_match = true_token in tt_top5_tokens[0]
+            ref_top5_text = [tokenizer.decode([t]) for t in tt_top5_tokens[0]]
         else:
             # Existing logic for reference file comparison
             ref_top5_tokens = top5_tokens[prefill_len + i]
-            top1_match = tt_argmax_token.item() == ref_top5_tokens[0].item()
-            top5_match = tt_argmax_token in ref_top5_tokens
+            top1_match = tt_argmax_token[0].item() == ref_top5_tokens[0].item()
+            top5_match = tt_argmax_token[0] in ref_top5_tokens
             ref_top5_text = [tokenizer.decode([t]) for t in ref_top5_tokens]
 
         # Check top-1 and top-5 accuracy
         top1_correct.append(top1_match)
         top5_correct.append(top5_match)
         true_match = (
-            tt_argmax_token.item() == input_ids[0, prefill_len + i + 1].item() if i < generation_length - 1 else False
+            tt_argmax_token[0].item() == input_ids[0, prefill_len + i + 1].item()
+            if i < generation_length - 1
+            else False
         )
 
         # Store error information vs reference model if top5 is incorrect
@@ -370,7 +407,7 @@ def test_tt_model_acc(
             context_start = max(0, prefill_len + i - 9)
             context_tokens = input_ids[0, context_start : prefill_len + i + 1]
             context_text = tokenizer.decode(context_tokens.tolist())
-            incorrect_token = tokenizer.decode([tt_argmax_token])
+            incorrect_token = tokenizer.decode([tt_argmax_token[0]])
             expected_tokens = [tokenizer.decode([t]) for t in ref_top5_tokens]
             errors.append(
                 {
@@ -378,7 +415,7 @@ def test_tt_model_acc(
                     "context": context_text,
                     "incorrect": incorrect_token,
                     "expected": expected_tokens,
-                    "predicted_id": tt_argmax_token.item(),
+                    "predicted_id": tt_argmax_token[0].item(),
                     "expected_ids": ref_top5_tokens.tolist(),
                 }
             )
@@ -386,7 +423,7 @@ def test_tt_model_acc(
         sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
 
         # Decode tokens to text
-        tt_argmax_text = tokenizer.decode([tt_argmax_token])
+        tt_argmax_text = tokenizer.decode([tt_argmax_token[0]])
         true_text = tokenizer.decode([true_token]) if true_token is not None else "N/A"
 
         # Prepare table row

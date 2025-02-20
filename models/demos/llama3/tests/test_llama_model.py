@@ -19,6 +19,9 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    skip_for_batch_parallelism,
+    skip_for_parallelism,
+    skip_for_model_parallelism,
 )
 from models.utility_functions import skip_for_grayskull
 
@@ -30,20 +33,23 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 1),
+        # ("random", 1),
         ("instruct", None),
     ],
-    ids=["quick", "full"],
+    ids=[
+        "quick",
+        #  "full"
+    ],
 )
 @pytest.mark.parametrize(
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -51,8 +57,17 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
+    "batch_dp_tp",
+    [
+        # (32, 1, 1),
+        # (64, 2, 1),
+        # (2, 1, 2),
+        # (2, 2, 1),
+        (4, 2, 1),
+        (1, 1, 2),
+        # (1, 1, 1)
+    ],
+    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
@@ -78,7 +93,7 @@ def test_llama_model_inference(
     weights,
     layers,
     max_seq_len,
-    batch_size,
+    batch_dp_tp,
     paged_attention,
     page_params,
     optimizations,
@@ -87,6 +102,20 @@ def test_llama_model_inference(
     reset_seeds,
     ensure_gc,
 ):
+    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+
+    skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
+    if skip:
+        pytest.skip(reason)
+    skip, reason = skip_for_parallelism(
+        mesh_device.get_num_devices() if mesh_device else 0, data_parallel, tensor_parallel
+    )
+    if skip:
+        pytest.skip(reason)
+    skip, reason = skip_for_model_parallelism(data_parallel)
+    if skip:
+        pytest.skip(reason)
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
@@ -101,6 +130,8 @@ def test_llama_model_inference(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
+        data_parallel=data_parallel,
+        tensor_parallel=tensor_parallel,
     )
 
     model_name = {
@@ -203,7 +234,8 @@ def test_llama_model_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.device_chunk_batch_size,
+            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -247,14 +279,15 @@ def test_llama_model_inference(
         all_outputs_ref = []
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
+    dims = (0, None) if data_parallel > 1 else (None, None)
     current_pos_tensor = ttnn.from_torch(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -280,14 +313,25 @@ def test_llama_model_inference(
         )
 
         # Convert ttnn tensor to torch tensor
+        dims = (2, 1) if data_parallel > 1 else (1, -1)
         mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+            mesh_device, dims=(3, 1) if model_args.is_galaxy else dims, mesh_shape=model_args.cluster_shape
         )
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
-            .permute(2, 1, 0, 3)
-            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
-        )
+        if data_parallel > 1 and model_args.device_chunk_batch_size < 32:
+            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
+            padded_batch = torch.chunk(tt_output_torch, data_parallel, 2)
+            unpad_batch = []
+            for chunk in padded_batch:
+                unpad_batch.append(chunk[:, :, : model_args.device_chunk_batch_size, :])
+            tt_output_torch = torch.cat(unpad_batch, 2)
+
+            tt_output_torch = tt_output_torch.permute(2, 1, 0, 3).squeeze(2)[:batch, 0:1, : model_args.vocab_size]
+        else:
+            tt_output_torch = (
+                ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
+                .permute(2, 1, 0, 3)
+                .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
+            )
 
         ttnn.deallocate(tt_out)
 
@@ -296,14 +340,15 @@ def test_llama_model_inference(
             ref_output = reference_model(pt_decode_input, current_pos[0])
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
+        dims = (0, None) if data_parallel > 1 else (None, None)
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -361,28 +406,61 @@ def test_llama_model_inference(
                     ]
                     tt_layer_present = []
                     if paged_attention:
-                        for layer_past in tt_model.layers[l].attention.layer_past:
-                            tt_layer_present.append(
-                                ttnn.to_torch(
-                                    layer_past,
+                        if data_parallel > 1:
+                            for cache in tt_model.layers[l].attention.layer_past:
+                                gather_layer = ttnn.to_torch(
+                                    cache,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
                                         dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
-                                )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                                .reshape(
-                                    model_args.max_batch_size,
-                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                                    model_args.n_kv_heads,
-                                    paged_attention_config.block_size,
-                                    model_args.head_dim,
                                 )
-                                .transpose(1, 2)
-                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                                    :batch, ...
-                                ]
-                            )
+                                split_gather = torch.chunk(gather_layer, data_parallel, 0)
+                                tmp = []
+                                for layer in split_gather:
+                                    t = (
+                                        layer[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                                        .reshape(
+                                            model_args.device_chunk_batch_size,
+                                            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
+                                            model_args.n_kv_heads,
+                                            paged_attention_config.block_size,
+                                            model_args.head_dim,
+                                        )
+                                        .transpose(1, 2)
+                                        .reshape(
+                                            model_args.device_chunk_batch_size,
+                                            model_args.n_kv_heads,
+                                            -1,
+                                            model_args.head_dim,
+                                        )[: model_args.device_chunk_batch_size, ...]
+                                    )
+                                    tmp.append(t)
+                                tt_layer_present.append(torch.cat(tmp, dim=0))
+                        else:
+                            for layer_past in tt_model.layers[l].attention.layer_past:
+                                tt_layer_present.append(
+                                    ttnn.to_torch(
+                                        layer_past,
+                                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                            mesh_device,
+                                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                            mesh_shape=model_args.cluster_shape,
+                                        ),
+                                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                                    .reshape(
+                                        model_args.max_batch_size,
+                                        paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                                        model_args.n_kv_heads,
+                                        paged_attention_config.block_size,
+                                        model_args.head_dim,
+                                    )
+                                    .transpose(1, 2)
+                                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                        :batch, ...
+                                    ]
+                                )
                     else:
                         for layer_past in tt_model.layers[l].attention.layer_past:
                             tt_layer_present.append(

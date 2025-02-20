@@ -34,14 +34,8 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        True,
-        # False
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention"
-    ),
+    (True, False),
+    ids=("paged_attention", "default_attention"),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -54,7 +48,15 @@ from models.utility_functions import skip_for_grayskull
         128,
     ),
 )
+@pytest.mark.parametrize(
+    "data_parallel",
+    (
+        True,
+        False,
+    ),
+)
 def test_llama_decoder_inference(
+    data_parallel,
     max_seq_len,
     paged_attention,
     page_params,
@@ -64,11 +66,19 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    batch_size = 1  # For prefill we only support batch_size = 1
+    batch_size = mesh_device.get_num_devices() if data_parallel else 1  # For prefill we only support batch_size = 1
+    tensor_parallel = mesh_device.get_num_devices() if not data_parallel else 1
+    data_parallel = batch_size
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        data_parallel=data_parallel,
+        tensor_parallel=tensor_parallel,
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -119,7 +129,8 @@ def test_llama_decoder_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.device_chunk_batch_size,
+            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -145,9 +156,7 @@ def test_llama_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
-        decode_input = model_args.prepare_residual_tensor_prefill(
-            tt_decode_input,
-        )
+        decode_input = model_args.prepare_residual_tensor_prefill(tt_decode_input, data_parallel=data_parallel)
         positions = torch.LongTensor(range(max_seq_len))
         freqs_cis_i = precompute_freqs_cis(
             model_args.head_dim,
@@ -165,7 +174,9 @@ def test_llama_decoder_inference(
         tt_out = tt_model(decode_input, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(0, 1) if data_parallel > 1 else (1, 3), mesh_shape=model_args.cluster_shape
+            ),
         )
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1

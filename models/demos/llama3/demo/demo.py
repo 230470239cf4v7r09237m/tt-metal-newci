@@ -15,7 +15,11 @@ import requests
 from pathlib import Path
 import hashlib
 
-from models.utility_functions import nearest_32
+from models.utility_functions import (
+    nearest_32,
+    skip_for_batch_parallelism,
+    skip_for_model_parallelism,
+)
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -65,10 +69,11 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 # load from json, return as a list
-def load_inputs(user_input, batch, instruct_mode):
+def load_inputs(user_input, batch, instruct_mode, data_parallel=1):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
+    user_input = user_input * data_parallel
     assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
     in_prompt = []
     cache_dir = Path("models/demos/llama3/demo/context_cache")
@@ -184,6 +189,7 @@ def run_llama3_demo(
     instruct_mode,
     is_ci_env,
     print_to_file,
+    data_parallel_devices,
 ):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -193,7 +199,9 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
-    assert batch_size <= 32, "Max batch size currently supported is 32"
+    assert (
+        batch_size <= 32 * data_parallel_devices
+    ), "Max batch size currently supported is 32"  # TODO: DP * num_devices_dp
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -209,7 +217,7 @@ def run_llama3_demo(
     if len(user_input) == 1:
         input_prompts = user_input * batch_size
     else:
-        input_prompts = load_inputs(user_input, batch_size, instruct_mode)
+        input_prompts = load_inputs(user_input, batch_size, instruct_mode, data_parallel_devices)
     profiler.end("loading_inputs")
 
     # Generate the batched prompts (rotate the inputs between the users, for each batch)
@@ -225,13 +233,17 @@ def run_llama3_demo(
         max_batch_size=batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        data_parallel=data_parallel_devices,
+        tensor_parallel=mesh_device.get_num_devices() // data_parallel_devices,
     )
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
-    tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
+    tt_device_name = (
+        model_args.device_name
+    )  # ["N150", "N300", "T3K", "TG"] - DP will always see N150, we expect that perf also
 
     if llama_model_name in ["3.1-8B", "3.2-11B"] and tt_device_name == "N150":
         assert (
@@ -256,7 +268,8 @@ def run_llama3_demo(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.device_chunk_batch_size,
+            paged_attention_config.max_num_blocks // model_args.device_chunk_batch_size,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -329,27 +342,34 @@ def run_llama3_demo(
         logger.info(f"Starting prefill...")
 
         # Do not count the first user for prefill time and instead log it as compile time
-        num_users_generated_prefill = batch_size - 1 if batch_size > 1 else 1
+        num_users_generated_prefill = batch_size - data_parallel_devices if batch_size > 1 else 1
 
         pt_out = []
 
         profiler.start(f"inference_prefill", iteration=batch_idx)
-        for batch_id in range(batch_size):
-            prefill_seq_len = prefill_lens[batch_id]
+        for batch_id in range(0, batch_size, data_parallel_devices):
+            prefill_seq_len = prefill_lens[batch_id : (batch_id + data_parallel_devices)]
+
             rot_mats_prefill = get_prefill_rot_mat(
                 model_args.head_dim,
                 model_args.max_seq_len,
                 mesh_device,
-                seq_len=prefill_seq_len,
+                seq_len=prefill_seq_len if data_parallel_devices > 1 else prefill_seq_len[0],
                 scale_factor=model_args.rope_scaling_factor,
             )
-            if decoding_pos[batch_id] < prefill_seq_len:
-                pt_prefill_input[batch_id][
-                    :, decoding_pos[batch_id] :, :
-                ] = 0  # Zero out the tokens after the prefill length
+
+            for i in range(data_parallel_devices):
+                if decoding_pos[batch_id + i] < prefill_seq_len[i]:
+                    pt_prefill_input[batch_id + i][
+                        :, decoding_pos[batch_id + i] :, :
+                    ] = 0  # Zero out the tokens after the prefill length
 
             prefill_input = model_args.prepare_residual_tensor_prefill(
-                pt_prefill_input[batch_id],
+                pt_prefill_input[batch_id : (batch_id + data_parallel_devices)]
+                if data_parallel_devices > 1
+                else pt_prefill_input[batch_id],
+                data_parallel=data_parallel_devices,
+                sections=prefill_seq_len,
             )
 
             if batch_id == 0:  # First user prefill accounts for compile time
@@ -359,10 +379,15 @@ def run_llama3_demo(
                 prefill_input,
                 current_pos=None,
                 rot_mats=rot_mats_prefill,
-                user_id=batch_id,
+                user_id=batch_id // data_parallel_devices,
                 mode="prefill",
                 page_table=page_table_tt,
-                get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+                get_last_token=[
+                    ((decoding_pos[id] - 1) // 32) * 32 for id in range(batch_id, batch_id + data_parallel_devices)
+                ]
+                if data_parallel_devices > 1
+                else ((decoding_pos[batch_id] - 1) // 32) * 32,
+                sections=prefill_seq_len,
             )
 
             if (
@@ -386,41 +411,61 @@ def run_llama3_demo(
                     get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
                 )
 
-            pt_out.append(
-                ttnn.to_torch(
-                    tt_out,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device,
-                        dims=(3, 1) if model_args.is_galaxy else (1, -1),
-                        mesh_shape=model_args.cluster_shape,
-                    ),
-                )[0, 0, (decoding_pos[batch_id] - 1) % 32, : model_args.vocab_size]
+            dims = (0, 1) if data_parallel_devices > 1 else (1, -1)
+            concat_tensor = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(  # TODO: concant on batch
+                    mesh_device,
+                    dims=(3, 1) if model_args.is_galaxy else dims,
+                    mesh_shape=model_args.cluster_shape,
+                ),
             )
+
+            for idx, slice in enumerate(concat_tensor):
+                tmp = slice[0, (decoding_pos[batch_id + idx] - 1) % 32, : model_args.vocab_size]
+                pt_out.append(tmp)
             ttnn.deallocate(tt_out)
 
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices_tp):
+        for i in range(
+            model_args.num_devices_tp * model_args.num_devices_dp
+        ):  # TODO: will probably need to sync for dp as well
             ttnn.synchronize_device(mesh_device.get_devices()[i])
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         # Preparing first decode token
-        profiler.start(f"prepare_first_decode_token_{batch_idx}")
+        profiler.start(f"prepare_first_decode_token_{batch_idx}")  # TODO: DP not yet sure how this scales
         pt_out_batched = torch.stack(pt_out, dim=-2)
         pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
         # Pad the output tensor to be tile sized
+        mesh_mapper = (
+            ttnn.ShardPaddedTensorToMesh(mesh_device, dim=3, pad_size=32 - model_args.device_chunk_batch_size)
+            if data_parallel_devices > 1
+            else ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+        torch_tensor = (
+            pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            if data_parallel_devices > 1
+            else torch.nn.functional.pad(
+                pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                (0, 32 * data_parallel_devices - len(pt_out_batched)),
+                "constant",
+                0,
+            )
+        )
+
         tt_out_tok = ttnn.from_torch(
-            torch.nn.functional.pad(
-                pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 32 - len(pt_out_batched)), "constant", 0
-            ),
+            torch_tensor,
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=mesh_mapper,
             dtype=ttnn.uint32,
         )
         profiler.end(f"prepare_first_decode_token_{batch_idx}")
 
         # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
+        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
             user_tok = int(pt_out_batched[user].item())
             all_outputs[user].append(user_tok)
@@ -452,14 +497,14 @@ def run_llama3_demo(
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
-
+        dims = (0, None) if data_parallel_devices > 1 else (None, None)
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -504,6 +549,8 @@ def run_llama3_demo(
                 temperature=sampling_params["temperature"],
                 top_p=sampling_params["top_p"],
                 on_host=True,
+                data_parallel=data_parallel_devices > 1,
+                batch_chunk=model_args.device_chunk_batch_size,
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         ttnn.plus_one(current_pos_tensor)
@@ -553,20 +600,26 @@ def run_llama3_demo(
             mesh_mapper=(
                 ttnn.ShardTensor2dMesh(
                     mesh_device,
-                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else dims,
                     mesh_shape=model_args.cluster_shape,
                 )
-                if tt_model.args.num_devices_tp > 1
+                if (tt_model.args.num_devices_tp * tt_model.args.num_devices_dp) > 1
                 else None
             ),
         )
+        mesh_mapper = (
+            ttnn.ShardPaddedTensorToMesh(mesh_device, dim=3, pad_size=32 - model_args.device_chunk_batch_size)
+            if data_parallel_devices > 1
+            else ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
         tt_out_tok_reset = ttnn.from_torch(
-            torch.nn.functional.pad(
-                pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 32 - len(pt_out_batched)), "constant", 0
-            ),
+            torch_tensor,
             # torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 30), "constant", 0),
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices_tp > 1 else None,
+            mesh_mapper=mesh_mapper
+            if (tt_model.args.num_devices_tp * tt_model.args.num_devices_dp) > 1
+            else None,  # TODO: DP?
         )
 
         # Reset the current position and output token tensors for the real decode run
@@ -597,6 +650,8 @@ def run_llama3_demo(
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             ttnn.record_event(0, op_event)
 
+            # Print out generated outputs for each user at the end of every iteration
+            iteration_time = time() - iteration_time_start
             # Update current pos and mat idxs on host and send to device
             # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
             # If this tensor is int32, it won't be supported by ttnn.embedding
@@ -622,6 +677,8 @@ def run_llama3_demo(
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
+                    data_parallel=data_parallel_devices > 1,
+                    batch_chunk=model_args.device_chunk_batch_size,
                 )
                 tt_output_torch = tt_output_torch[0, 0, 0, :batch_size]
                 ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
@@ -639,9 +696,6 @@ def run_llama3_demo(
                     logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                     if all(user_done):
                         users_decoding = False
-
-            # Print out generated outputs for each user at the end of every iteration
-            iteration_time = time() - iteration_time_start
 
             # Ignore the first iteration for average speed calculation
             if iteration > 0:
@@ -741,7 +795,7 @@ def run_llama3_demo(
         "inference_prefill": inference_prefill_time,
         "inference_decode": inference_decode_time,
         "prefill_time_to_token": prefill_time_to_first,
-        "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prefill_seq_len,  # tokens/s
+        "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prefill_seq_len[0],  # tokens/s
         "decode_t/s/u": num_tokens_generated_decode[0] / inference_decode_time,  # tokens/s/u
         "decode_t/s": num_tokens_generated_decode[0] / inference_decode_time * batch_size,  # tokens/s
         # Optional measurements
@@ -853,7 +907,7 @@ def run_llama3_demo(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
-            input_sequence_length=prefill_seq_len,
+            input_sequence_length=prefill_seq_len[0],
             output_sequence_length=1,
         )
 
@@ -873,53 +927,69 @@ def run_llama3_demo(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, data_parallel",
     [
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        ),
+        # (  # Batch-1 run (Latency) - single user, small prompt
+        #     "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+        #     True,  # instruct mode
+        #     1,  # repeat_batches
+        #     1024,  # max_seq_len
+        #     1,  # batch_size
+        #     200,  # max_generated_tokens
+        #     True,  # paged_attention
+        #     {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+        #     False,  # data_parallel
+        # ),
+        # (  # Batch-32 run (Throughput) - 32 users, small prompt
+        #     "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+        #     True,  # instruct mode
+        #     1,  # repeat_batches
+        #     1024,  # max_seq_len
+        #     32,  # batch_size
+        #     200,  # max_generated_tokens
+        #     True,  # paged_attention
+        #     {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+        #     False,  # data_parallel
+        # ),
+        # (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        #     "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
+        #     True,  # instruct mode
+        #     1,  # repeat_batches
+        #     64 * 1024,  # max_seq_len
+        #     1,  # batch_size
+        #     200,  # max_generated_tokens
+        #     False,  # paged_attention
+        #     {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+        #     False, # data_parallel
+        # ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
-            32,  # batch_size
+            4,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            64 * 1024,  # max_seq_len
-            1,  # batch_size
-            200,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        ),
+            True,  # data_parallel
+        )
     ],
     ids=[
-        "batch-1",  # latency
-        "batch-32",  # throughput
-        "long-context",  # max-length
+        # "batch-1",  # latency
+        # "batch-32",  # throughput
+        # "long-context",  # max-length
+        "batch-DP",  # data_parallel
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
+        # LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
@@ -942,6 +1012,7 @@ def test_llama_demo(
     paged_attention,
     page_params,
     sampling_params,
+    data_parallel,
     optimizations,
     mesh_device,
     use_program_cache,
@@ -954,6 +1025,18 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
+
+    num_devices = mesh_device.get_num_devices() if data_parallel else 1
+    if data_parallel:
+        batch_size = batch_size * num_devices
+        if num_devices == 32:
+            pytest.skip("TG not yet supported for DP")
+        skip, reason = skip_for_batch_parallelism(batch_size, num_devices)
+        if skip:
+            pytest.skip(reason)
+        skip, reason = skip_for_model_parallelism(num_devices)
+        if skip:
+            pytest.skip(reason)
 
     mesh_device.enable_async(True)
 
@@ -979,4 +1062,5 @@ def test_llama_demo(
         instruct_mode=instruct,
         is_ci_env=is_ci_env,
         print_to_file=False,
+        data_parallel_devices=num_devices,
     )

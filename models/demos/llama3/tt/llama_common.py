@@ -299,39 +299,40 @@ def sample_top_p(probs: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True, data_parallel=False):
+def sample_host(
+    tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True, data_parallel=False, batch_chunk=None
+):
     vocab_size = tt_input.shape[-1]
     if mesh_device:
+        mesh_composer = (
+            ttnn.ConcatUnpaddedMeshToTensor(mesh_device, 2, batch_chunk)
+            if data_parallel
+            else ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(2, 1) if data_parallel else (1, -1), mesh_shape=list(mesh_device.shape)
+            )
+        )
         pt_input = ttnn.to_torch(
             tt_input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=(2, 1) if data_parallel else (1, -1), mesh_shape=list(mesh_device.shape)
-            ),  # TODO: DP concat on batch
+            mesh_composer=mesh_composer,
         )[:, :1, :, :vocab_size]
     else:  # input already on host
         pt_input = tt_input[..., :vocab_size]
 
-    if temperature > 0:  # TODO: DP
+    if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
         pt_out = sample_top_p(probs.squeeze(), top_p)
         if mesh_device:
             pt_out = pt_out.view(1, 1, 1, -1)
     else:
         if mesh_device:
-            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(
-                -1, -2
-            )  # TODO: DP will need to be separate for batch
+            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
         else:
             pt_out = torch.argmax(pt_input, dim=-1)
 
     if mesh_device is None:
         return pt_out
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(3, None),
-            mesh_shape=list(mesh_device.shape),
-        )
+        ttnn.ShardPaddedTensorToMesh(mesh_device, 3, 32 - batch_chunk)
         if data_parallel
         else ttnn.ReplicateTensorToMesh(mesh_device)
     )

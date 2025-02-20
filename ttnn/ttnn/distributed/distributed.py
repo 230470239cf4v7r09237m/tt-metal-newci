@@ -285,6 +285,26 @@ class ShardPaddedTensorToMesh(TensorToMesh):
         }
 
 
+class ConcatUnpaddedMeshToTensor(MeshToTensor):
+    def __init__(self, mesh_device: MeshDevice, dim: int, unpad_size: int):
+        self.concat_dim = dim
+        self.mesh_device = mesh_device
+        self.unpad_size = unpad_size
+
+    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+        import torch
+
+        indices = torch.arange(list(tensor.shape)[self.concat_dim]) < self.unpad_size
+
+        device_shards_converted_to_torch = [
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None).index_select(
+                self.concat_dim, indices.nonzero(as_tuple=True)[0]
+            )
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
+        return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
+
+
 class ShardTensorToMesh(TensorToMesh):
     def __init__(self, mesh_device, dim):
         super().__init__(mesh_device)

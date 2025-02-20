@@ -19,6 +19,7 @@ from .distributed import (
     ReplicateTensorToMesh,
     SplitTensorToMesh,
     ShardPaddedTensorToMesh,
+    ConcatUnpaddedMeshToTensor,
     MeshToTensor,
     ConcatMeshToTensor,
     ListMeshToTensor,
