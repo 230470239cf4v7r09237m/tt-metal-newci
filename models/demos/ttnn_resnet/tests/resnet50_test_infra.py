@@ -189,8 +189,8 @@ class ResNet50TestInfra:
 
         if batch_size <= 2:
             pytest.skip("Batch size 1 and 2 are not supported with sharded data")
-        elif batch_size == 8:
-            pytest.skip("Skipping batch size 8 due to memory config issue")
+        # elif batch_size == 8:
+        #     pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
             pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 

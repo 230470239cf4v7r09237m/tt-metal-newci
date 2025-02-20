@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -585,3 +585,34 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     output_tensor = ttnn.to_torch(output_tensor)
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape
+
+
+def test_my_add(device):
+    shape = [1, 1, 50176, 256]
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.float32)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.float32)
+
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = torch.nn.ReLU()(torch_output_tensor)
+
+    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))])
+    mem_config = ttnn.create_sharded_memory_config_(
+        shape=(shape[-2], shape[-1]),
+        core_grid=core_range_set,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    print(f"mem_config: {mem_config}")
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=mem_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=mem_config
+    )
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc, msg = check_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+    assert pcc, msg

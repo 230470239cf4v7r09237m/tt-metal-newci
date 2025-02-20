@@ -249,7 +249,7 @@ class resnet50Bottleneck:
         conv_op_cache,
         reshard_if_not_optimal=False,
         height_sharding=None,
-        eltwise_binary_out_in_place=True,
+        eltwise_binary_out_in_place=False,
         transpose_shards=True,
         packer_l1_acc=True if not is_grayskull() else False,
         enable_act_double_buffer=False,
@@ -555,9 +555,11 @@ class resnet50Bottleneck:
                 out,
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         ttnn.deallocate(ds_out)
+        if not eltwise_binary_out_in_place:
+            out = ttnn.reallocate(out)
         return out, input_height, input_width
 
 
@@ -971,6 +973,7 @@ class resnet50:
             x_height,
             x_width,
             conv_op_cache,
+            # eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
             enable_split_reader=True,
