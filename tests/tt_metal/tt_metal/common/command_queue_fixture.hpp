@@ -93,8 +93,16 @@ protected:
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         const chip_id_t mmio_device_id = 0;
+        std::vector<chip_id_t> chip_ids;
+        if (tt::Cluster::instance().get_board_type(0) == BoardType::UBB) {
+            for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+                chip_ids.push_back(id);
+            }
+        } else {
+            chip_ids.push_back(mmio_device_id);
+        }
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
+            chip_ids, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         if (enable_remote_chip) {
             for (const auto& [id, device] : this->reserved_devices_) {
