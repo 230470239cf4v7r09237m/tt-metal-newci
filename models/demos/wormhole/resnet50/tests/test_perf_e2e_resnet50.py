@@ -100,7 +100,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.004, 30),),
+    ((32, 0.004, 30),),
 )
 def test_perf_trace_2cqs(
     device,

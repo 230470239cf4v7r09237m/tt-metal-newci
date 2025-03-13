@@ -256,6 +256,13 @@ void MAIN {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+
+#ifdef ARCH_BLACKHOLE
+                            // FIXME: This is a temporary workaround to avoid hangs on blackhole.
+                            for (uint32_t i = 0; i < 100; i++) {
+                                asm volatile("nop");
+                            }
+#endif
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
