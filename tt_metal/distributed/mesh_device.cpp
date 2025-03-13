@@ -385,6 +385,12 @@ bool MeshDevice::close() {
     scoped_devices_.reset();
     parent_mesh_.reset();
     view_.reset();
+
+    for (const auto& submesh_wptr : submeshes_) {
+        if (auto submesh = submesh_wptr.lock()) {
+            submesh->close();
+        }
+    }
     return true;
 }
 
