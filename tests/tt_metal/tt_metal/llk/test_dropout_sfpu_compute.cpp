@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <random>
+
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -241,7 +243,10 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
 }  // namespace unit_tests::compute::sfpu::dropout
 
 TEST_F(DeviceFixture, TensixComputeDropout) {
-    srand(0);
+    std::random_device rd;                        // Seed for the random number generator
+    std::mt19937 gen(rd());                       // Mersenne Twister random number generator
+    std::uniform_int_distribution<uint32_t> dis;  // Uniform distribution for uint32_t
+
     int num_tests = 5;
     float fill_constant = 9.0;
     for (int i = 0; i <= num_tests; i++) {
@@ -249,8 +254,10 @@ TEST_F(DeviceFixture, TensixComputeDropout) {
         unit_tests::compute::sfpu::dropout::DropoutConfig test_config = {
             .probability = probability,
             .fill_constant = fill_constant,
-            .seed_0 = static_cast<uint32_t>(rand()),
-            .seed_1 = static_cast<uint32_t>(rand())};
+            .seed_0 = dis(gen),  // Generate a random seed
+            .seed_1 = dis(gen)   // Generate another random seed
+        };
+        tt::log_info(tt::LogTest, "Testing dropout with seed_0={}, seed_1={}", test_config.seed_0, test_config.seed_1);
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
 }
