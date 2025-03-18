@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <llrt/rtoptions.hpp>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/allocator.hpp>
