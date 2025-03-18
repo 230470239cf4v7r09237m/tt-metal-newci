@@ -22,6 +22,7 @@ typedef DataFormat CommonDataFormat;
 #endif
 
 #include <cstddef>
+#include <cstdint>
 
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
 // TODO: when device specific headers specify number of processors
