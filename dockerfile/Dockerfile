@@ -2,6 +2,8 @@
 
 #############################################################
 
+# YIPEEEEEE - please delete me - testing hashing
+
 # Accept an argument to specify the Ubuntu version
 ARG UBUNTU_VERSION=20.04
 ARG IMAGE_ARCH=amd64
