@@ -488,7 +488,7 @@ def test_unary_ceil(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
+@skip_for_grayskull()
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
