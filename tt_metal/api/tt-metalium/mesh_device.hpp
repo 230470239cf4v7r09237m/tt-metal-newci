@@ -7,16 +7,19 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "device.hpp"
+#include "dispatch_core_common.hpp"
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
 #include "mesh_trace_id.hpp"
+#include "small_vector.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
@@ -46,6 +49,12 @@ private:
             size_t num_command_queues,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
+        ScopedDevices(
+            const std::vector<int>& device_ids,
+            size_t l1_small_size,
+            size_t trace_region_size,
+            size_t num_command_queues,
+            const DispatchCoreConfig& dispatch_core_config);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -59,10 +68,12 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
-    std::vector<std::shared_ptr<MeshDevice>>
-        submeshes_;                          // Parent owns submeshes and is responsible for their destruction
-    std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
-    std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
+    std::shared_ptr<MeshDevice> parent_mesh_;
+    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
@@ -83,7 +94,7 @@ public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::weak_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;
@@ -106,8 +117,6 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
@@ -282,6 +291,20 @@ public:
 
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
+        int device_id,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,

@@ -8,8 +8,8 @@
 
 #include <assert.hpp>
 #include <mesh_coord.hpp>
-#include <reflection.hpp>
-#include <span.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -117,6 +117,23 @@ bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
     return lhs.dims() == rhs.dims() && std::equal(lhs.coords().begin(), lhs.coords().end(), rhs.coords().begin());
 }
 bool operator!=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs == rhs); }
+
+bool operator<(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
+    TT_FATAL(
+        lhs.dims() == rhs.dims(),
+        "Cannot compare coordinates with different dimensions: {} != {}",
+        lhs.dims(),
+        rhs.dims());
+    for (size_t i = 0; i < lhs.dims(); ++i) {
+        if (lhs[i] != rhs[i]) {
+            return lhs[i] < rhs[i];
+        }
+    }
+    return false;
+}
+bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return rhs < lhs; }
+bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs > rhs); }
+bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs < rhs); }
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord) {
     os << "MeshCoordinate([";

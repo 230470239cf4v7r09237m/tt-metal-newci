@@ -54,7 +54,7 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 }
@@ -68,4 +68,18 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
         "comparison_mode_pcc": 0.998
     }'
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+}
+
+run_python_model_tests_blackhole() {
+    SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
+
+    # Llama3.1-8B
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+    # Run all Llama3 tests for 8B - dummy weights with tight PCC check
+    for llama_dir in "$llama8b"; do
+        LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    done
+
+    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_batch_16.py
 }

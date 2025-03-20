@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <future>
+
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
@@ -9,6 +11,8 @@
 #include "impl/debug/watcher_server.hpp"
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
+
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
 
