@@ -2,14 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
 #include <tt-metalium/constants.hpp>
 #include "cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
+#include <pybind11/cast.h>
 #include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -54,13 +58,14 @@ void py_bind_conv2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               sliding_window::SlidingWindowPadding padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ConvSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -80,7 +85,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -100,6 +106,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
@@ -114,13 +121,14 @@ void py_bind_conv2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               sliding_window::SlidingWindowPadding padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ConvSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -140,7 +148,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -160,6 +169,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 
     module.def(
@@ -317,6 +327,12 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
+
+    auto py_conv_slice_config = py::class_<ConvSliceConfig>(module, "ConvSliceConfig");
+    py_conv_slice_config.def(
+        py::init<bool, uint32_t>(), py::kw_only(), py::arg("slice_output_height"), py::arg("output_slice_size"));
+    py_conv_slice_config.def_readwrite("slice_output_height", &ConvSliceConfig::slice_output_height);
+    py_conv_slice_config.def_readwrite("output_slice_size", &ConvSliceConfig::output_slice_size);
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
