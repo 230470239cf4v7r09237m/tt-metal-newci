@@ -93,6 +93,7 @@ void init_sync_registers() {
 }
 
 int main(int argc, char *argv[]) {
+    disable_gathering();
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
