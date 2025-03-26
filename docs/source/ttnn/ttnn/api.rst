@@ -280,7 +280,7 @@ Pointwise Unary
    ttnn.conj_bw
    ttnn.conj
    ttnn.polar
-   ttnn.interleaved_complex_rotate90
+   ttnn.alt_complex_rotate90
 
 Pointwise Binary
 ================

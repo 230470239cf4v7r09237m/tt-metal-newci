@@ -492,8 +492,8 @@ def test_unary_ceil(input_shapes, device):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_interleaved_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
-    ttnn_function = ttnn.interleaved_complex_rotate90
+def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
+    ttnn_function = ttnn.alt_complex_rotate90
     golden_function = ttnn.get_golden_function(ttnn_function)
 
     torch.manual_seed(0)

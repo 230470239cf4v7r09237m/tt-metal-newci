@@ -249,7 +249,7 @@ REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tanh, TANH);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
-REGISTER_UNARY_OPERATION(interleaved_complex_rotate90, INTERLEAVED_COMPLEX_ROTATE90);
+REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90);
 
 constexpr auto log_sigmoid = ttnn::register_operation_with_auto_launch_op<
     "ttnn::log_sigmoid",

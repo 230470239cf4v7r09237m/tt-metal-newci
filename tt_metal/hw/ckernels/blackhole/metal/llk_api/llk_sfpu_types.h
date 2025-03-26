@@ -91,6 +91,6 @@ enum SfpuType {
     cumsum,
     fill,
     prelu,
-    interleaved_complex_rotate90,
+    alt_complex_rotate90,
     round,
 };

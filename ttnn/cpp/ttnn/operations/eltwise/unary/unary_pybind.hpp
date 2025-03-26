@@ -1655,7 +1655,7 @@ void py_module(py::module& module) {
     R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
     detail::bind_unary_operation(
         module,
-        ttnn::interleaved_complex_rotate90,
+        ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(The last dimension of the input tensor must be even.)doc");

@@ -92,7 +92,7 @@ enum class UnaryOpType {
     FILL,
     PRELU_SFPU,
     ZERO_POINT,
-    INTERLEAVED_COMPLEX_ROTATE90,
+    ALT_COMPLEX_ROTATE90,
     MISH,
 };
 
