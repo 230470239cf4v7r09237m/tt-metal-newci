@@ -342,6 +342,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::INTERLEAVED_COMPLEX_ROTATE90:
             op_init_and_name = {"interleaved_complex_rotate90_tile_init();", fmt::format("interleaved_complex_rotate90_tile({});", idst)};
             break;
+        case UnaryOpType::MISH: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -444,6 +445,13 @@ std::map<string, string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+}
+
+std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
+    switch (op_type) {
+        case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+        default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
+    }
 }
 
 }  // namespace ttnn::operations::unary::utils
