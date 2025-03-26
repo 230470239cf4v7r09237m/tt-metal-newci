@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/fabric_host_utils.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -55,6 +56,7 @@ void append_fabric_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -63,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const BarrierSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -81,17 +83,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         input_tensor.device()->id(),
         is_first_chip,
         is_last_chip);
-
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links,
-            topology);
-
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
@@ -119,7 +110,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
+    const size_t packet_size_bytes = edm_config.channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
@@ -142,6 +134,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_page_layout = input_tensor.layout();
@@ -172,6 +165,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
+    bool two_phase_release = semaphore.wait.address() != semaphore.release.address();
+    bool last_dim = dim == input_tensor_shape.rank() - 1;
+    uint32_t tile_rows = input_tensor_shape[dim - 1] / input_tensor.get_tensor_spec().tile().get_height();
+    uint32_t tile_cols_for_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                                        // my_chip_id
@@ -183,6 +180,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
+        two_phase_release,                                 // two_phase_release
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -204,31 +202,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
         uint32_t remainder = input_tensor_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        uint32_t num_tiles_per_chip = input_tensor_shape[2] * input_tensor_shape[3] / 1024;
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
             input_tile_id_end,                 // tile_id_end
         };
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
@@ -237,9 +222,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
+        if (last_dim) {
+            output_tile_id_start = tile_cols_for_chip * ring_index;  // multi width tile for each chip
+            output_tile_id_end = tile_rows * tile_cols_for_chip;
+        }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            semaphore.wait.address(),           // wait_semaphore_addr
+            semaphore.release.address(),        // release_semaphore_addr
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -247,18 +237,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.x,                  // out_ready_sem_noc0_x
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            ring_size,                          // ring_size
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
+        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -268,9 +267,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             const auto& output = output_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
-
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
-
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
@@ -281,7 +277,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                if (semaphore.has_value()) {
+                    // User specified a global semaphore value -> the AllGatherAsync structure has a handle to a valid
+                    // semaphore Update the RTAs pointing to it.
+                    log_trace(
+                        tt::LogOp,
+                        "DEBUG: semaphore.wait: {}, semaphore.release: {}",
+                        semaphore->wait.address(),
+                        semaphore->release.address());
+                    worker_writer_sender_runtime_args[1] = semaphore->wait.address();
+                    worker_writer_sender_runtime_args[2] = semaphore->release.address();
+                }
             }
         };
 
@@ -290,6 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -298,7 +305,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const BarrierSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -315,16 +322,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         input_tensor.device()->id(),
         is_first_chip,
         is_last_chip);
-
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links,
-            topology);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -370,7 +367,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
+    const size_t packet_size_bytes = edm_config.channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -414,6 +412,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         reader_kernel_config);
 
     // Writer
+    bool two_phase_release = semaphore.wait.address() != semaphore.release.address();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
@@ -424,6 +423,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
+        two_phase_release,                // two_phase_release
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -499,16 +499,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -532,7 +522,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
+            semaphore.wait.address(),             // wait_semaphore_addr
+            semaphore.release.address(),          // release_semaphore_addr
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -549,8 +540,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
@@ -565,9 +564,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             const auto& output = output_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
-
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
-
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
@@ -578,7 +574,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
+                if (semaphore.has_value()) {
+                    // User specified a global semaphore value -> the AllGatherAsync structure has a handle to a valid
+                    // semaphore Update the RTAs pointing to it.
+                    log_trace(
+                        tt::LogOp,
+                        "DEBUG: semaphore.wait: {}, semaphore.release: {}",
+                        semaphore->wait.address(),
+                        semaphore->release.address());
+                    worker_writer_sender_runtime_args[1] = semaphore->wait.address();
+                    worker_writer_sender_runtime_args[2] = semaphore->release.address();
+                }
             }
         };
 

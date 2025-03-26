@@ -31,14 +31,19 @@ enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 2,
 };
 
+struct BarrierSemaphore {
+    GlobalSemaphore wait;
+    GlobalSemaphore release;
+};
 struct AllGatherAsync {
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const GlobalSemaphore semaphore;
+    mutable std::optional<BarrierSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    std::optional<CoreRangeSet> cores;
     bool enable_persistent_fabric_mode;
     std::optional<uint32_t> cluster_axis;
 
@@ -48,8 +53,9 @@ struct AllGatherAsync {
         uint32_t ring_size,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        GlobalSemaphore semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        std::optional<BarrierSemaphore> semaphore,
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        const std::optional<CoreRangeSet>& cores,
         bool enable_persistent_fabric_mode,
         std::optional<uint32_t> cluster_axis) :
         dim(dim),
@@ -59,6 +65,7 @@ struct AllGatherAsync {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
+        cores(cores),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode),
         cluster_axis(cluster_axis) {}
 
@@ -72,7 +79,8 @@ struct AllGatherAsync {
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("semaphore_first", semaphore->wait);
+        attrs.emplace_back("semaphore_second", semaphore->release);
 
         return attrs;
     }
@@ -81,7 +89,7 @@ struct AllGatherAsync {
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
+        const ttnn::MeshCoordinate& mesh_coord,
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors) const;
     const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
@@ -111,6 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     bool enable_persistent_fabric_mode);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -119,11 +128,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const BarrierSemaphore& semaphores,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -132,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const BarrierSemaphore& semaphores,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
@@ -163,6 +173,13 @@ Tensor all_gather_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);
 
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const CoreRangeSet& cores,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);  // TODO make reference
 }  // namespace ccl
 }  // namespace experimental
 }  // namespace operations
