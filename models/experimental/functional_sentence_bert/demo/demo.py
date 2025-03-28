@@ -12,6 +12,7 @@ import pytest
 from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.stats import pearsonr, spearmanr
+from tests.ttnn.integration_tests.sentence_bert.test_ttnn_sentence_bert import custom_preprocessor
 
 
 def mean_pooling(token_embeddings, attention_mask):
@@ -58,6 +59,7 @@ def test_sentence_bert_demo_inference(device, inputs):
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_module,
+        custom_preprocessor=custom_preprocessor,
         device=device,
     )
     ttnn_module = ttnn_BertModel(parameters=parameters, config=config)
