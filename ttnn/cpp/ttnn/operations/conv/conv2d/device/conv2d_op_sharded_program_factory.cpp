@@ -725,19 +725,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
-    tt_metal::Buffer* src0_dram_buffer = a.buffer();
-    tt_metal::Buffer* src1_dram_buffer = b.buffer();
-
-    tt_metal::Buffer* dst_dram_buffer = output.buffer();
-    TT_FATAL(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_sharded(), "Output buffer must be sharded!");
 
     // out
-    uint32_t out_dram_addr = dst_dram_buffer->address();
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_FATAL(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
-
-    // act
-    uint32_t act_dram_addr = src0_dram_buffer->address();
 
     TT_FATAL(
         act_block_h_ntiles % out_subblock_h_ntiles == 0,
@@ -751,7 +743,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
     // weight
-    uint32_t weight_dram_addr = src1_dram_buffer->address();
+    const uint32_t weight_dram_addr = b.buffer()->address();
 
     // bias
     tt_metal::Buffer* bias_buffer = nullptr;
@@ -785,8 +777,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output_height_num_tiles,
         act_matrix_height_ntiles);
 
-    uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
-    uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
     uint32_t dst_l1_act_buffer_size_bytes =
         out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
     uint32_t dst_l1_weight_buffer_size_bytes =
@@ -836,7 +826,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
         log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
         log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
-        log_debug(LogOp, "act_dram_addr: {}", act_dram_addr);
         log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
         log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
         log_debug(LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
@@ -855,7 +844,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         log_debug(LogOp, "has_bias: {}", has_bias);
         log_debug(LogOp, "bias_dram_addr: {}", bias_dram_addr);
         log_debug(LogOp, "bias_ntiles: {}", bias_ntiles);
-        log_debug(LogOp, "out_dram_addr: {}", out_dram_addr);
         log_debug(LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
         log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
@@ -1334,7 +1322,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         in0_num_blocks_w = 1 * conv_act_c_blocks;
     }
     reader_compile_time_args = {
-        (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t)stride_h,
         (uint32_t)stride_w,
         (uint32_t)dilation_h,
@@ -1373,10 +1360,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::map<string, string> writer_defines;
     std::map<string, string> writer_mcast_sender_defines;
     std::map<string, string> compute_defines;
-    if (output.memory_config().is_sharded()) {
-        writer_defines["SHARDED_OUT"] = "1";
-        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
-    }
     if (total_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
@@ -1411,7 +1394,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
 
     writer_compile_time_args = {
-        (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         cb_indices.out0_cb,
         cb_indices.weight_cb,
         cb_indices.bias_cb,
@@ -1448,7 +1430,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output_height_num_tiles,                        // out_height_num_tiles without block shape padding
         output_width_num_tiles,                         // out_width_num_tiles withoug block shape padding
 
-        out_dram_addr,
         weight_dram_addr,
         bias_dram_addr,
         aligned_output_num_pages,
@@ -1647,42 +1628,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         SetRuntimeArgs(program, reader_id, core, reader_rt_args);
 
         writer_rt_args = {
-            out_dram_addr,
             weight_dram_addr,
             bias_dram_addr,
-
-            output_width_num_tiles,                          // out_next_tile_stride_h
-            1,                                               // out_next_tile_stride_w
-            out_subblock_h_ntiles * output_width_num_tiles,  // out_next_subblock_stride_h
-            out_subblock_w_ntiles,                           // out_next_subblock_stride_w
-            act_block_h_ntiles * output_width_num_tiles,     // out_next_block_stride_h
-            weight_block_w_ntiles,                           // out_next_block_stride_w
-            out_subblock_h_ntiles,
-            out_subblock_w_ntiles,
-            out_subblock_num_tiles,
-            act_block_h_ntiles / out_subblock_h_ntiles,     // out_num_subblocks_h
-            weight_block_w_ntiles / out_subblock_w_ntiles,  // out_num_subblocks_w
-            num_blocks_act_h_per_core,                      // out_num_blocks_h
-            num_blocks_weight_w_per_core,                   // out_num_blocks_w
-            act_block_h_ntiles,                             // out_block_height_num_tiles
-            output_height_num_tiles,                        // out_height_num_tiles without block shape padding
-            output_width_num_tiles,                         // out_width_num_tiles withoug block shape padding
 
             out_start_tile_id,
             out_start_tile_id_h,
             out_start_tile_id_w,
 
-            num_blocks_act_w,  // = number of blocks of weight in height dim
-            in1_block_num_tiles,
-            conv_act_c_blocks,
-            weight_block_h_ntiles / conv_act_c_blocks,
-            weight_block_w_ntiles,
-            weight_matrix_width_ntiles,                          // weight_stride_h
-            weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
-            weight_block_w_ntiles,                               // weight_next_block_stride_w
-
             // bias
-            bias_ntiles_per_core,
             bias_tile_offset,
 
             (uint32_t)noop_core};
@@ -1830,47 +1783,31 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             }
 
             auto dst_buffer = output_tensors.at(0).buffer();
-            bool out_sharded = output_tensors[0].is_sharded();
 
             auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
 
             auto& writer_sender_kernel_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_id);
             for (const auto& core : mcast_sender_cores) {
-                if (!src_a_is_sharded) {
-                    auto& runtime_args = reader_kernel_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer_a->address();
-                }
                 auto& runtime_args = writer_sender_kernel_args_by_core[core.x][core.y];
-                runtime_args[0] = dst_buffer->address();
-                runtime_args[1] = src_buffer_b->address();
+                runtime_args[0] = src_buffer_b->address();
                 if (has_bias) {
-                    runtime_args[2] = (*src_buffer_c)->address();
+                    runtime_args[1] = (*src_buffer_c)->address();
                 }
             }
 
             if (mcast_receiver_cores.size() > 0) {
                 auto& writer_receiver_kernel_args_by_core = GetRuntimeArgs(program, writer_mcast_receiver_id);
                 for (const auto& core : mcast_receiver_cores) {
-                    if (!src_a_is_sharded) {
-                        auto& runtime_args = reader_kernel_args_by_core[core.x][core.y];
-                        runtime_args[0] = src_buffer_a->address();
-                    }
                     auto& runtime_args = writer_receiver_kernel_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                    runtime_args[1] = src_buffer_b->address();
+                    runtime_args[0] = src_buffer_b->address();
                     if (has_bias) {
-                        runtime_args[2] = (*src_buffer_c)->address();
+                        runtime_args[1] = (*src_buffer_c)->address();
                     }
                 }
             }
 
-            if (src_a_is_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
-            }
-
-            if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

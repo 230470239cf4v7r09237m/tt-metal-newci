@@ -4,63 +4,56 @@
 
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
-
 void kernel_main() {
     // This writer is for output tensor in tile format
-    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(1);
 
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(12);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(13);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(14);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(15);
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(14);
 
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(16);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(15);
 
-    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(17);
-    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(18);
-    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(19);
-    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(20);
-    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(21);
-    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(15);  // == weight_next_block_stride_w
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(23);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(24);
-    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(25);
-    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(26);
-    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(27);
-    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(28);
-    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(29);
-    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(30);
-    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(31);
+    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(16);
+    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(18);
+    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(19);
+    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(20);
+    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(14);  // == weight_next_block_stride_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(23);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(24);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(25);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(26);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(27);
+    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(28);
+    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(30);
 
-    constexpr uint32_t out_addr = get_compile_time_arg_val(32);
-    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(35);
+    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(33);
     constexpr uint32_t total_weight_num_tiles =
         weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
     uint32_t i = 0;
-    i += 1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i);
     i += 1;
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_addr = get_arg_val<uint32_t>(i);
     i += 1;
-    i += 16;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i);
     i += 1;
     uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i);
     i += 1;
     uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i);
     i += 1;
-    i += 9;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i);
     i += 1;
 
@@ -106,49 +99,24 @@ void kernel_main() {
         weights_mcast_receiver_semaphore_addr);
 #endif
 
-    const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
-    const DataFormat out_df = get_dataformat(cb_id_out0);
-
-    const InterleavedAddrGenFast<out_in_dram> s = {
-        .bank_base_address = out_addr, .page_size = tile_nbytes, .data_format = out_df};
+    constexpr uint32_t tile_nbytes = get_tile_size(cb_id_out0);
+    constexpr DataFormat out_df = get_dataformat(cb_id_out0);
 
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(3) == 1;
 
-    const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
-    const DataFormat bias_df = get_dataformat(bias_cb_id);
+    constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    constexpr DataFormat bias_df = get_dataformat(bias_cb_id);
     const InterleavedAddrGenFast<bias_in_dram> s_bias = {
         .bank_base_address = bias_addr, .page_size = bias_pagesize, .data_format = bias_df};
 
     bool load_bias = true;
 #endif
 
-    // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
-    // DPRINT << "out_num_blocks_h - " << out_num_blocks_h << ENDL();
-    // DPRINT << "out_num_blocks_w - " << out_num_blocks_w << ENDL();
-
-    // DPRINT << "out_num_subblocks_h - " << out_num_subblocks_h << ENDL();
-    // DPRINT << "out_num_subblocks_w - " << out_num_subblocks_w << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-
-    // DPRINT << "out_subblock_tile_count - " << out_subblock_tile_count << ENDL();
-
-    // DPRINT << "num_blocks_weight_h - " << num_blocks_weight_h << ENDL();
-    // DPRINT << "weight_block_height_ntiles - " << weight_block_height_ntiles << ENDL();
-    // DPRINT << "weight_block_width_ntiles - " << weight_block_width_ntiles << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-    // DPRINT << "out_block_height_num_tiles - " << out_block_height_num_tiles << ENDL();
-    // DPRINT << "out_height_num_tiles - " << out_height_num_tiles << ENDL();
-    // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
-
-    const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const DataFormat weight_df = get_dataformat(cb_id_weight);
+    constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
+    constexpr DataFormat weight_df = get_dataformat(cb_id_weight);
     const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
 
@@ -200,7 +168,6 @@ void kernel_main() {
                             weight_row_start_tile_id += weight_stride_h;
                         }  // for weight_block_h
                         noc_async_read_barrier();
-
 #ifndef SKIP_MCAST
                         // wait until all weights mcast destinations have atomically incremented the weights
                         // semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset the
@@ -322,7 +289,5 @@ void kernel_main() {
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
-#ifdef SHARDED_OUT
     cb_wait_front(cb_id_out0, output_rows_tiles);
-#endif
 }
