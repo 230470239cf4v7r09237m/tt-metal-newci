@@ -1217,7 +1217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (filter_h >= 1 and filter_w >= 1) {
-        if (!is_conv1d and weight_width_sliced) {
+        if (!is_conv_1d_depthwise_conv and weight_width_sliced) {
             // 2D conv
             TT_FATAL(read_window_in_inner_loop == true, "read_window_in_inner_loop should be true for this conv");
             reader_kernel =

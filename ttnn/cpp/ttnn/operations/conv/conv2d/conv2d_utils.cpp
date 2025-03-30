@@ -857,7 +857,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
     // 1d deptwise convs support only height sharding
-    if (conv_is_1d) {
+    if (conv_is_1d_deptwise) {
         return height.conv_config;
     }
 
@@ -874,8 +874,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
+    log_info(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
+    log_info(
         LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
     return winning_config.conv_config;
