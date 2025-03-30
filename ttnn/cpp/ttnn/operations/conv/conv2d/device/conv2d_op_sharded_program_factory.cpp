@@ -1269,21 +1269,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
-            if (split_reader) {
-                writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                    "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-            } else {
-                writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                    "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                    "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-            }
+
+            writer_mcast_sender_kernel =
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+                "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+            writer_mcast_receiver_kernel =
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+                "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
         }
         // Local L1 to store array for reader indices
         // All convs use packed uint16 indices, so each entry can be 2B (not 4)
@@ -1434,6 +1426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_dram_addr,
         aligned_output_num_pages,
     };
+
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
             // (uint32_t)act_block_h_datums,
@@ -1446,6 +1439,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             (uint32_t)act_block_w_extra_align_bytes,                      // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_split,                           // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_last_block};
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+    } else {
+        std::vector<uint32_t> split_reader_args(8, 0);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
