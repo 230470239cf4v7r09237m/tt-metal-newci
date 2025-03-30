@@ -415,8 +415,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
 
-    // out_subblock_h_ntiles = 8;
-
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -712,7 +710,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
         output_channels_padded_to_tile_width,
         weight_matrix_width);
-    uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
     uint32_t num_blocks_output_w =
         (uint32_t)std::ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
@@ -1258,9 +1255,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
             reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
             writer_mcast_sender_kernel =
-                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+                "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
             writer_mcast_receiver_kernel =
-                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+                "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
         } else {
             // 1D conv
@@ -1405,25 +1404,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         // bias
         bias_ntiles_per_core,
 
-        output_width_num_tiles,                          // out_next_tile_stride_h
-        1,                                               // out_next_tile_stride_w
-        out_subblock_h_ntiles * output_width_num_tiles,  // out_next_subblock_stride_h
-        out_subblock_w_ntiles,                           // out_next_subblock_stride_w
-        act_block_h_ntiles * output_width_num_tiles,     // out_next_block_stride_h
-        // weight_block_w_ntiles, // out_next_block_stride_w
-        out_subblock_h_ntiles,
-        out_subblock_w_ntiles,
-        out_subblock_num_tiles,
-        act_block_h_ntiles / out_subblock_h_ntiles,     // out_num_subblocks_h
-        weight_block_w_ntiles / out_subblock_w_ntiles,  // out_num_subblocks_w
-        num_blocks_act_h_per_core,                      // out_num_blocks_h
-        num_blocks_weight_w_per_core,                   // out_num_blocks_w
-        act_block_h_ntiles,                             // out_block_height_num_tiles
-        output_height_num_tiles,                        // out_height_num_tiles without block shape padding
-        output_width_num_tiles,                         // out_width_num_tiles withoug block shape padding
+        num_blocks_act_h_per_core,     // out_num_blocks_h
+        num_blocks_weight_w_per_core,  // out_num_blocks_w
 
-        weight_dram_addr,
-        bias_dram_addr,
         aligned_output_num_pages,
     };
 
