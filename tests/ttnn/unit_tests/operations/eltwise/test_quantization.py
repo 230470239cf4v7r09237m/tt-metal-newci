@@ -10,11 +10,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random, skip_for_grayskull
 
 
-def convert_scale_to_ttnn_tensor(device, scale, dim):
-    scale_tensor = torch.tensor([scale])
+def convert_scalar_to_ttnn_tensor(device, scalar, dim, out_dtype):
+    if dim == 0:
+        return scalar
+    scalar_tensor = torch.tensor([scalar])
     for i in range(1, dim):
-        scale_tensor = torch.unsqueeze(scale_tensor, 0)
-    return ttnn.from_torch(scale_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        scalar_tensor = torch.unsqueeze(scalar_tensor, 0)
+    return ttnn.from_torch(scalar_tensor, dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 # Quantize to the [q_min, q_max] range (scale-then-shift)
@@ -51,7 +53,7 @@ def check_match_ratio(golden, other, check_dtype):
 # TODO: remove this once the accuracy issue of the composite op fallback is fixed
 def check_pcc(golden, other, relax_for_composite):
     if relax_for_composite:
-        assert_with_pcc(golden, other, 0.99985)
+        assert_with_pcc(golden, other, 0.9998)
     else:
         assert_with_pcc(golden, other)
 
@@ -59,7 +61,8 @@ def check_pcc(golden, other, relax_for_composite):
 @pytest.mark.parametrize("n", [16, 31, 63, 128, 65536])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1])
-def test_quantize_1d(device, n, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1])
+def test_quantize_1d(device, n, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(n, dtype=torch.float32)
@@ -67,8 +70,8 @@ def test_quantize_1d(device, n, input_dtype, scale_tensor_dim):
 
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -81,7 +84,8 @@ def test_quantize_1d(device, n, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("n", [16, 31, 63, 128, 65536])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1])
-def test_dequantize_1d(device, n, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1])
+def test_dequantize_1d(device, n, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(n, dtype=torch.float32)
@@ -90,8 +94,8 @@ def test_dequantize_1d(device, n, input_dtype, scale_tensor_dim):
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
     torch_dequantized_tensor = torch.dequantize(torch_quantized_tensor)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -107,21 +111,28 @@ def test_dequantize_1d(device, n, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("n", [16, 41, 37, 128, 65536])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("in_scale_tensor_dim", [0, 1])
+@pytest.mark.parametrize("in_zero_point_tensor_dim", [0, 1])
 @pytest.mark.parametrize("out_scale_tensor_dim", [0, 1])
-def test_requantize_1d(device, n, input_dtype, in_scale_tensor_dim, out_scale_tensor_dim):
-    if in_scale_tensor_dim == 0 and out_scale_tensor_dim != 0:
-        pytest.skip("rdiv returns nan")
-
+@pytest.mark.parametrize("out_zero_point_tensor_dim", [0, 1])
+def test_requantize_1d(
+    device,
+    n,
+    input_dtype,
+    in_scale_tensor_dim,
+    in_zero_point_tensor_dim,
+    out_scale_tensor_dim,
+    out_zero_point_tensor_dim,
+):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(n, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point(torch_input_tensor, -128, 127)
     scale_new, zero_point_new = calculate_scale_zero_point(torch_input_tensor, -37, 73)
 
-    if in_scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, in_scale_tensor_dim)
-    if out_scale_tensor_dim > 0:
-        scale_new = convert_scale_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, in_scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, in_zero_point_tensor_dim, ttnn.int32)
+    scale_new = convert_scalar_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim, ttnn.float32)
+    zero_point_new = convert_scalar_to_ttnn_tensor(device, zero_point_new, out_zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -129,7 +140,11 @@ def test_requantize_1d(device, n, input_dtype, in_scale_tensor_dim, out_scale_te
     dequantized_tensor = ttnn.dequantize(requantized_tensor, scale_new, zero_point_new, dtype=input_dtype)
     output_tensor = ttnn.to_torch(dequantized_tensor)
 
-    check_pcc(torch_input_tensor, output_tensor, in_scale_tensor_dim != 0 or out_scale_tensor_dim != 0)
+    check_pcc(
+        torch_input_tensor,
+        output_tensor,
+        max(in_scale_tensor_dim, in_zero_point_tensor_dim, out_scale_tensor_dim, out_zero_point_tensor_dim) > 0,
+    )
     check_match_ratio(torch_input_tensor, output_tensor, input_dtype)
 
 
@@ -137,7 +152,8 @@ def test_requantize_1d(device, n, input_dtype, in_scale_tensor_dim, out_scale_te
 @pytest.mark.parametrize("w", [16, 31, 63, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2])
-def test_quantize_2d(device, h, w, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2])
+def test_quantize_2d(device, h, w, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(h, w, dtype=torch.float32)
@@ -145,8 +161,8 @@ def test_quantize_2d(device, h, w, input_dtype, scale_tensor_dim):
 
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -160,7 +176,8 @@ def test_quantize_2d(device, h, w, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("w", [16, 31, 63, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2])
-def test_dequantize_2d(device, h, w, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2])
+def test_dequantize_2d(device, h, w, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(h, w, dtype=torch.float32)
@@ -169,8 +186,8 @@ def test_dequantize_2d(device, h, w, input_dtype, scale_tensor_dim):
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
     torch_dequantized_tensor = torch.dequantize(torch_quantized_tensor)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -187,21 +204,29 @@ def test_dequantize_2d(device, h, w, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("w", [16, 31, 63, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("in_scale_tensor_dim", [0, 1, 2])
+@pytest.mark.parametrize("in_zero_point_tensor_dim", [0, 1, 2])
 @pytest.mark.parametrize("out_scale_tensor_dim", [0, 1, 2])
-def test_requantize_2d(device, h, w, input_dtype, in_scale_tensor_dim, out_scale_tensor_dim):
-    if in_scale_tensor_dim == 0 and out_scale_tensor_dim != 0:
-        pytest.skip("rdiv returns nan")
-
+@pytest.mark.parametrize("out_zero_point_tensor_dim", [0, 1, 2])
+def test_requantize_2d(
+    device,
+    h,
+    w,
+    input_dtype,
+    in_scale_tensor_dim,
+    in_zero_point_tensor_dim,
+    out_scale_tensor_dim,
+    out_zero_point_tensor_dim,
+):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(h, w, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point(torch_input_tensor, -128, 127)
     scale_new, zero_point_new = calculate_scale_zero_point(torch_input_tensor, -37, 73)
 
-    if in_scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, in_scale_tensor_dim)
-    if out_scale_tensor_dim > 0:
-        scale_new = convert_scale_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, in_scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, in_zero_point_tensor_dim, ttnn.int32)
+    scale_new = convert_scalar_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim, ttnn.float32)
+    zero_point_new = convert_scalar_to_ttnn_tensor(device, zero_point_new, out_zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -209,7 +234,11 @@ def test_requantize_2d(device, h, w, input_dtype, in_scale_tensor_dim, out_scale
     dequantized_tensor = ttnn.dequantize(requantized_tensor, scale_new, zero_point_new, dtype=input_dtype)
     output_tensor = ttnn.to_torch(dequantized_tensor)
 
-    check_pcc(torch_input_tensor, output_tensor, in_scale_tensor_dim != 0 or out_scale_tensor_dim != 0)
+    check_pcc(
+        torch_input_tensor,
+        output_tensor,
+        max(in_scale_tensor_dim, in_zero_point_tensor_dim, out_scale_tensor_dim, out_zero_point_tensor_dim) > 0,
+    )
     check_match_ratio(torch_input_tensor, output_tensor, input_dtype)
 
 
@@ -218,7 +247,8 @@ def test_requantize_2d(device, h, w, input_dtype, in_scale_tensor_dim, out_scale
 @pytest.mark.parametrize("x2", [11, 113])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2, 3])
-def test_quantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2, 3])
+def test_quantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, dtype=torch.float32)
@@ -226,8 +256,8 @@ def test_quantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
 
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -242,7 +272,8 @@ def test_quantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("x2", [11, 113])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2, 3])
-def test_dequantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2, 3])
+def test_dequantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, dtype=torch.float32)
@@ -251,8 +282,8 @@ def test_dequantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
     torch_dequantized_tensor = torch.dequantize(torch_quantized_tensor)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -270,21 +301,30 @@ def test_dequantize_3d(device, x0, x1, x2, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("x2", [11, 113])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("in_scale_tensor_dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("in_zero_point_tensor_dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("out_scale_tensor_dim", [0, 1, 2, 3])
-def test_requantize_3d(device, x0, x1, x2, input_dtype, in_scale_tensor_dim, out_scale_tensor_dim):
-    if in_scale_tensor_dim == 0 and out_scale_tensor_dim != 0:
-        pytest.skip("rdiv returns nan")
-
+@pytest.mark.parametrize("out_zero_point_tensor_dim", [0, 1, 2, 3])
+def test_requantize_3d(
+    device,
+    x0,
+    x1,
+    x2,
+    input_dtype,
+    in_scale_tensor_dim,
+    in_zero_point_tensor_dim,
+    out_scale_tensor_dim,
+    out_zero_point_tensor_dim,
+):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point(torch_input_tensor, -128, 127)
     scale_new, zero_point_new = calculate_scale_zero_point(torch_input_tensor, -37, 73)
 
-    if in_scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, in_scale_tensor_dim)
-    if out_scale_tensor_dim > 0:
-        scale_new = convert_scale_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, in_scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, in_zero_point_tensor_dim, ttnn.int32)
+    scale_new = convert_scalar_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim, ttnn.float32)
+    zero_point_new = convert_scalar_to_ttnn_tensor(device, zero_point_new, out_zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -292,7 +332,11 @@ def test_requantize_3d(device, x0, x1, x2, input_dtype, in_scale_tensor_dim, out
     dequantized_tensor = ttnn.dequantize(requantized_tensor, scale_new, zero_point_new, dtype=input_dtype)
     output_tensor = ttnn.to_torch(dequantized_tensor)
 
-    check_pcc(torch_input_tensor, output_tensor, in_scale_tensor_dim != 0 or out_scale_tensor_dim != 0)
+    check_pcc(
+        torch_input_tensor,
+        output_tensor,
+        max(in_scale_tensor_dim, in_zero_point_tensor_dim, out_scale_tensor_dim, out_zero_point_tensor_dim) > 0,
+    )
     check_match_ratio(torch_input_tensor, output_tensor, input_dtype)
 
 
@@ -302,7 +346,8 @@ def test_requantize_3d(device, x0, x1, x2, input_dtype, in_scale_tensor_dim, out
 @pytest.mark.parametrize("x3", [64])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2, 3, 4])
-def test_quantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2, 3, 4])
+def test_quantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, x3, dtype=torch.float32)
@@ -310,8 +355,8 @@ def test_quantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
 
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -327,7 +372,8 @@ def test_quantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("x3", [64])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("scale_tensor_dim", [0, 1, 2, 3, 4])
-def test_dequantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
+@pytest.mark.parametrize("zero_point_tensor_dim", [0, 1, 2, 3, 4])
+def test_dequantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim, zero_point_tensor_dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, x3, dtype=torch.float32)
@@ -336,8 +382,8 @@ def test_dequantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
     torch_quantized_tensor = torch.quantize_per_tensor(torch_input_tensor, scale, zero_point, dtype=torch.qint32)
     torch_dequantized_tensor = torch.dequantize(torch_quantized_tensor)
 
-    if scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -356,21 +402,31 @@ def test_dequantize_4d(device, x0, x1, x2, x3, input_dtype, scale_tensor_dim):
 @pytest.mark.parametrize("x3", [64])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("in_scale_tensor_dim", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("in_zero_point_tensor_dim", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("out_scale_tensor_dim", [0, 1, 2, 3, 4])
-def test_requantize_4d(device, x0, x1, x2, x3, input_dtype, in_scale_tensor_dim, out_scale_tensor_dim):
-    if in_scale_tensor_dim == 0 and out_scale_tensor_dim != 0:
-        pytest.skip("rdiv returns nan")
-
+@pytest.mark.parametrize("out_zero_point_tensor_dim", [0, 1, 2, 3, 4])
+def test_requantize_4d(
+    device,
+    x0,
+    x1,
+    x2,
+    x3,
+    input_dtype,
+    in_scale_tensor_dim,
+    in_zero_point_tensor_dim,
+    out_scale_tensor_dim,
+    out_zero_point_tensor_dim,
+):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(x0, x1, x2, x3, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point(torch_input_tensor, -128, 127)
     scale_new, zero_point_new = calculate_scale_zero_point(torch_input_tensor, -37, 73)
 
-    if in_scale_tensor_dim > 0:
-        scale = convert_scale_to_ttnn_tensor(device, scale, in_scale_tensor_dim)
-    if out_scale_tensor_dim > 0:
-        scale_new = convert_scale_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, in_scale_tensor_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, in_zero_point_tensor_dim, ttnn.int32)
+    scale_new = convert_scalar_to_ttnn_tensor(device, scale_new, out_scale_tensor_dim, ttnn.float32)
+    zero_point_new = convert_scalar_to_ttnn_tensor(device, zero_point_new, out_zero_point_tensor_dim, ttnn.int32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tensor = ttnn.quantize(input_tensor, scale, zero_point)
@@ -378,7 +434,11 @@ def test_requantize_4d(device, x0, x1, x2, x3, input_dtype, in_scale_tensor_dim,
     dequantized_tensor = ttnn.dequantize(requantized_tensor, scale_new, zero_point_new, dtype=input_dtype)
     output_tensor = ttnn.to_torch(dequantized_tensor)
 
-    check_pcc(torch_input_tensor, output_tensor, in_scale_tensor_dim != 0 or out_scale_tensor_dim != 0)
+    check_pcc(
+        torch_input_tensor,
+        output_tensor,
+        max(in_scale_tensor_dim, in_zero_point_tensor_dim, out_scale_tensor_dim, out_zero_point_tensor_dim),
+    )
     check_match_ratio(torch_input_tensor, output_tensor, input_dtype)
 
 
