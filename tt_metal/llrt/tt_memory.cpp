@@ -23,10 +23,43 @@ memory::memory() {
 
 memory::memory(std::string const& path, Loading loading) : loading_(loading) {
     ElfFile elf;
-
+#if 1
+    std::vector<uint32_t> data;
+#endif
     elf.ReadImage(path);
+#if 1
+    // Dump
+    printf("Kernel %s\n", path.c_str());
+    for (const auto& seg : elf.GetSegments()) {
+        printf("Segment vma=%x lma=%x\n", seg.address, seg.lma);
+        auto addr = seg.address;
+        for (const auto word : seg.contents) {
+            data.push_back(word);
+            if (addr == seg.address || !(addr % 16)) {
+                printf("%08x: ", addr);
+            }
+            printf("%08x%c", word, addr % 16 ? ' ' : '\n');
+            addr += 4;
+        }
+        printf("\n");
+    }
+#endif
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
+#if 1
+        // Dump changes
+        unsigned pos = 0;
+        for (const auto& seg : elf.GetSegments()) {
+            auto addr = seg.address;
+            for (const auto word : seg.contents) {
+                if (word != data[pos++]) {
+                    printf("%08x: %08x changed to %08x\n", addr, data[pos - 1], word);
+                }
+                addr += 4;
+            }
+        }
+        printf("\n");
+#endif
     }
 
     auto const& segments = elf.GetSegments();
