@@ -13,6 +13,7 @@ jobs:
     with:
       build-wheel: true
       version: 20.04
+      toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
