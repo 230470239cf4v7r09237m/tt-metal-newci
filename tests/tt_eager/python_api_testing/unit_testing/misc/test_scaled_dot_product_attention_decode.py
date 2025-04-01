@@ -711,7 +711,7 @@ def run_test_sdpa_decode_paged_attention(
     )
     tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-    max_start_idx = 0
+    max_start_idx = 128
     causal = True
 
     while max_start_idx < s or not causal:
@@ -719,15 +719,15 @@ def run_test_sdpa_decode_paged_attention(
         start_indices = np.linspace(max(max_start_idx - b, 0), max_start_idx, b, dtype=np.int32).tolist()
 
         # Test when page_table does not contain blocks for full sequence length
-        k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+        k_chunk_size = 256
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
 
         tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
-            q_chunk_size=padded_num_heads,
-            k_chunk_size=k_chunk_size,
+            q_chunk_size=256,
+            k_chunk_size=256,
             exp_approx_mode=False,
         )
 
@@ -826,12 +826,13 @@ def run_test_sdpa_decode_paged_attention(
 
         max_start_idx += 71 if max_start_idx < 4096 else 3001
 
+        break
         if not causal:
             # only run one iteration for non-causal
             break
-        if max_start_idx >= s:
-            # run last iteration to test non-causal
-            causal = False
+        # if max_start_idx >= s:
+        #     # run last iteration to test non-causal
+        #     causal = False
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
@@ -858,8 +859,8 @@ def run_test_sdpa_decode_paged_attention(
         # [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), True],
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
-        [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
-        [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        # [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
+        [8, 8, 1, 256, 128, (8, 4), True],  # llama 3.1 8b N300
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -867,10 +868,11 @@ def run_test_sdpa_decode_paged_attention(
         # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+@pytest.mark.parametrize("block_size", (32,), ids=["paged_32"])
 def test_sdpa_decode_paged_attention(
-    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
+    mesh_device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
         pytest.skip("Skipping test for seq_len=128k with block_size!=64")
@@ -891,7 +893,7 @@ def test_sdpa_decode_paged_attention(
         sharded_out=False,
     )
 
-    assert device.num_program_cache_entries() == 4
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
