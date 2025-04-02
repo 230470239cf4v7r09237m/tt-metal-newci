@@ -7,10 +7,25 @@
 #include "cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "device/softmax_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 
 namespace ttnn::operations::normalization {
 
 using namespace moreh::moreh_softmax;
+
+/*
+ * This function adds -inf value to the padding regions of the input tensor.
+ * It is used to ensure that the softmax operation can be performed correctly
+ * on the input tensor, regardless of its layout.
+ *
+ * @param input_tensor The input tensor to be padded.
+ * @return The padded input tensor.
+ */
+static inline ttnn::Tensor get_padded_input(const ttnn::Tensor& input_tensor) {
+    bool is_tiled = input_tensor.get_layout() == TILE_LAYOUT;
+    return is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor, -std::numeric_limits<float>::infinity())
+                    : input_tensor;
+}
 
 ttnn::Tensor ExecuteSoftmax::invoke(
     const ttnn::Tensor& input_tensor,
@@ -20,13 +35,15 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     const bool numeric_stable) {
     const auto& input_shape = input_tensor.get_logical_shape();
     auto rank = input_shape.size();
+    auto padded_input_tensor = get_padded_input(input_tensor);
+
     auto dim = dim_arg;
     if (dim < 0) {
         dim = rank + dim;
     }
     if (rank > 4) {
         auto output_tensor = ttnn::prim::moreh_softmax(
-            input_tensor,
+            padded_input_tensor,
             dim,
             std::nullopt,
             MorehSoftmaxOp::SOFTMAX,
@@ -36,7 +53,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
         return ttnn::reshape(output_tensor, input_shape);
     }
 
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(padded_input_tensor);
     if (dim == rank - 1) {
         auto output_tensor = ttnn::operations::normalization::softmax(
             input_tensor_4D,
@@ -67,8 +84,9 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     const auto& input_shape = input_tensor.get_logical_shape();
+    auto padded_input_tensor = get_padded_input(input_tensor);
 
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(padded_input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_mask_softmax(
         input_tensor_4D,
         scale,
@@ -86,8 +104,9 @@ ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     const auto& input_shape = input_tensor.get_logical_shape();
+    auto padded_input_tensor = get_padded_input(input_tensor);
 
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(padded_input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax_in_place(
         input_tensor_4D, program_config, compute_kernel_config, numeric_stable);
     return ttnn::reshape(output_tensor, input_shape);
@@ -102,8 +121,9 @@ ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     const auto& input_shape = input_tensor.get_logical_shape();
+    auto padded_input_tensor = get_padded_input(input_tensor);
 
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(padded_input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_mask_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
     return ttnn::reshape(output_tensor, input_shape);
@@ -117,8 +137,9 @@ ttnn::Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     const auto& input_shape = input_tensor.get_logical_shape();
+    auto padded_input_tensor = get_padded_input(input_tensor);
 
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = ttnn::unsqueeze_to_4D(padded_input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_causal_mask_hw_dims_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
     return ttnn::reshape(output_tensor, input_shape);
