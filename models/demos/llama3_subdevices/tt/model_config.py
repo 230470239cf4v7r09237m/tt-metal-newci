@@ -260,6 +260,8 @@ class TtModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.3-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_1_70B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
