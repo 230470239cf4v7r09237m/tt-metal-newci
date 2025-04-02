@@ -26,7 +26,6 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
     TT_FATAL(attributes.ring_devices == 4, "ring_devices must be 4, got {}", attributes.ring_devices);
-    TT_FATAL(attributes.cross_device_semaphore.has_value(), "Cross device semaphore is not present");
 
     TT_FATAL(input_tensor.shard_spec().has_value(), "input_tensor must have a shard spec");
     TT_FATAL(
@@ -127,10 +126,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     const int32_t dim,
     const GlobalSemaphore& semaphore,
     const tt::tt_metal::SubDeviceId subdevice_id,
-    const uint32_t ring_index,
     const uint32_t cluster_axis,
-    std::optional<IDevice*>& forward_device,
-    std::optional<IDevice*>& backward_device,
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
@@ -139,13 +135,10 @@ LlamaReduceScatterDeviceOperation::invoke(
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
             .cross_device_semaphore = semaphore,
             .subdevice_id = subdevice_id,
-            .ring_index = ring_index,
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
             .ring_devices = ring_devices,
             .num_links = num_links,
-            .forward_device = forward_device,
-            .backward_device = backward_device,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }
