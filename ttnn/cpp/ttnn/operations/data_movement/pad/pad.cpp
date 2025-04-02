@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pad.hpp"
-
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_op.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/run_operation.hpp"
+
+#include "pad.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -171,11 +173,6 @@ static ttnn::Tensor pad_impl(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_logical_shape().rank();
-    if (int diff = original_rank - padding.size(); diff != 0) {
-        TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
-
-        padding.insert(padding.begin(), diff, {0, 0});
-    }
 
     TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
 
@@ -205,11 +202,6 @@ static ttnn::Tensor pad_impl(
     auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
     auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
 
-    const bool front_padding_is_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
-    if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
-        TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
-    }
-
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];
         const int target_width = output_padded_shape[padding_size - 1];
@@ -229,23 +221,38 @@ static ttnn::Tensor pad_impl(
         queue_id, input_tensor_4D, output_padded_shape, pad_front_array, value, use_multicore, memory_config_arg);
 }
 
-}  // anonymous namespace
+std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
+    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& pad_spec) {
+    if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+        return std::make_tuple(compute_padded_shape(input_logical_shape), compute_padded_shape(input_logical_shape));
+    }
 
-// This function signature is similar to pytorch's signature
-// Any rank tensor supported
+    const auto rank = input_logical_shape.rank();
+    ttnn::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
 
-ttnn::Tensor ExecutePad::invoke(
+    std::transform(
+        input_logical_shape.cbegin(),
+        input_logical_shape.cend(),
+        pad_spec.cbegin(),
+        requested_logical_shape_vec.begin(),
+        [](auto& a, auto& b) { return a + b.second; });
+
+    const ttnn::Shape logical_shape(requested_logical_shape_vec);
+    return std::make_tuple(logical_shape, compute_padded_shape(logical_shape));
+}
+
+ttnn::Tensor invoke_rm(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
+    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_logical_shape().rank();
-    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vec(padding.begin(), padding.end());
 
     ttnn::Tensor output_tensor =
         pad_impl(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg);
+
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
         auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
@@ -262,10 +269,98 @@ ttnn::Tensor ExecutePad::invoke(
         output_tensor = ttnn::reshape(
             output_tensor, update_original_shape(output_tensor.get_padded_shape(), input_tensor.get_logical_shape()));
     }
-
-    // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-
     return output_tensor;
+}
+
+ttnn::Tensor invoke_tile(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding_vec,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    const bool front_padding_is_zero =
+        std::all_of(padding_vec.begin(), padding_vec.end(), [](auto& x) { return x.first == 0; });
+    TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
+
+    const auto& input_logical_shape = input_tensor.get_logical_shape();
+    const auto& input_padded_shape = input_tensor.get_padded_shape();
+    const auto [requested_logical_shape, requested_padded_shape] =
+        compute_requested_shape(input_logical_shape, padding_vec);
+    const auto requested_rank = requested_logical_shape.rank();
+
+    const bool pad_upper_dims =
+        requested_logical_shape[0] != input_logical_shape[0] || requested_logical_shape[1] != input_logical_shape[1];
+
+    auto pad_current_tile_dim = [&requested_padded_shape, &input_logical_shape](const int i) {
+        return requested_padded_shape[i] / input_logical_shape[i] == 1;
+    };
+
+    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
+        output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
+    } else {
+        // need to align the requested padding to tile size. Note that begin padding is not supported so now just
+        // set to zero
+        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padded_padding_vec(requested_rank);
+        std::transform(
+            requested_padded_shape.cbegin(),
+            requested_padded_shape.cend(),
+            input_padded_shape.cbegin(),
+            padded_padding_vec.begin(),
+            [](auto& a, auto& b) { return std::make_pair(0, a - b); });
+
+        // this tensor will be 4D
+        output_tensor =
+            pad_impl(queue_id, output_tensor, std::move(padded_padding_vec), value, use_multicore, memory_config_arg);
+
+        // this is the padded shape
+        const auto output_shape = squeeze_or_unsqueeze_shape_to_ND(output_tensor.get_logical_shape(), requested_rank);
+
+        // "slice" down to logical shape
+        output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
+    }
+    return output_tensor;
+}
+}  // anonymous namespace
+
+// This function signature is similar to pytorch's signature
+// Any rank tensor supported
+
+ttnn::Tensor ExecutePad::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    const int original_rank = input_tensor.get_logical_shape().rank();
+    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vec(padding.begin(), padding.end());
+
+    if (int diff = original_rank - padding.size(); diff != 0) {
+        TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
+
+        padding_vec.insert(padding_vec.begin(), diff, {0, 0});
+    }
+
+    if (std::all_of(padding.begin(), padding.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+        return input_tensor;
+    }
+
+    if (original_rank > 4) {
+        const auto first_pad_idx =
+            std::find_if(padding.begin(), padding.end(), [](auto& p) { return p.second != 0; }) - padding.begin();
+        TT_FATAL(
+            first_pad_idx >= original_rank - 3,
+            "ttnn::pad only supports padding on the lowest 3 dimensions for tensors with rank > 4 {}",
+            first_pad_idx);
+    }
+
+    if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
+        return invoke_tile(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
+    } else {
+        return invoke_rm(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
+    }
 }
 
 #define PAD_OVERLOAD_DIM_IMPL(ShapeType)                                                                               \
