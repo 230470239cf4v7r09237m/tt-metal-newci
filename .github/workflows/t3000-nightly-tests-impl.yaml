@@ -24,6 +24,7 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k llama3-90b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_nightly_tests, timeout: 480, owner_id: U07RY6B5FLJ},  #Gongyu Wang
         ]
 
     name: ${{ matrix.test-group.name }}
@@ -79,6 +80,8 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          ls -lart /mnt/MLPerf/
+          source /work/tests/scripts/t3000/run_t3000_nightly_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
