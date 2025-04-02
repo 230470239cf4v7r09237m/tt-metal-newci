@@ -1728,11 +1728,12 @@ void py_module(py::module& module) {
         ttnn::floor_div,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
-    detail::bind_binary_composite_overload(
+    detail::bind_binary_overload_operation(
         module,
         ttnn::maximum,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Support provided only for WH_B0, BH.)doc");
 
     detail::bind_prelu(
         module,
