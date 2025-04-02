@@ -6,7 +6,7 @@
 #include <limits.h>
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt_cluster.hpp>
+#include <tt-metalium/metal_context.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

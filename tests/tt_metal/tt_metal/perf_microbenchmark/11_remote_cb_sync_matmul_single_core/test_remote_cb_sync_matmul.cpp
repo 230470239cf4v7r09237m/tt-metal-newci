@@ -578,7 +578,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         input_buffer = CreateBuffer(config);
     }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 

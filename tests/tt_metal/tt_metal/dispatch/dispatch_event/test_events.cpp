@@ -34,8 +34,10 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         auto start = std::chrono::system_clock::now();
 
         uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::get_cluster().get_associated_mmio_device(this->device_->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::get_cluster().get_assigned_channel_for_device(this->device_->id());
 
         vector<std::shared_ptr<Buffer>> buffers;
         for (size_t i = 0; i < num_buffers; i++) {
@@ -57,7 +59,7 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
-                tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+                tt::tt_metal::MetalContext::get_cluster().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
@@ -65,7 +67,7 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
                     completion_queue_base + (2 * i + 1) * completion_queue_page_size + completion_queue_event_offset;
-                tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+                tt::tt_metal::MetalContext::get_cluster().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
                 last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
@@ -270,8 +272,9 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     auto start = std::chrono::system_clock::now();
 
     uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel = tt::tt_metal::MetalContext::get_cluster().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
@@ -295,7 +298,7 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
-        tt::Cluster::instance().read_sysmem(&event_id, 4, host_addr, mmio_device_id, channel);
+        tt::tt_metal::MetalContext::get_cluster().read_sysmem(&event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, ++expected_event_id);
     }
 

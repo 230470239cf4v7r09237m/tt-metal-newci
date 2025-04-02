@@ -26,7 +26,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "llrt/hal.hpp"
-#include "tt_cluster.hpp"
+#include <tt-metalium/metal_context.hpp>
 
 using namespace tt;
 
@@ -229,13 +229,14 @@ int main(int argc, char** argv) {
         CoreCoord mcast_physical;
         if (mcast_from_eth_g) {
             mcast_virtual = device->ethernet_core_from_logical_core(mcast_logical);
-            mcast_physical = tt::Cluster::instance()
+            mcast_physical = tt::tt_metal::MetalContext::get_cluster()
                                  .get_soc_desc(device_num_g)
                                  .get_physical_ethernet_core_from_logical(mcast_logical);
         } else {
             mcast_virtual = device->worker_core_from_logical_core(mcast_logical);
-            mcast_physical =
-                tt::Cluster::instance().get_soc_desc(device_num_g).get_physical_tensix_core_from_logical(mcast_logical);
+            mcast_physical = tt::tt_metal::MetalContext::get_cluster()
+                                 .get_soc_desc(device_num_g)
+                                 .get_physical_tensix_core_from_logical(mcast_logical);
         }
 
         log_info(

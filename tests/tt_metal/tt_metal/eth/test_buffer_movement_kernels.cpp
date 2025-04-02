@@ -310,7 +310,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     const auto& receiver_device = devices_.at(1);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::MetalContext::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -354,7 +354,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     const auto& receiver_device = devices_.at(0);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::MetalContext::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -466,7 +466,8 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -541,7 +542,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -597,7 +599,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);

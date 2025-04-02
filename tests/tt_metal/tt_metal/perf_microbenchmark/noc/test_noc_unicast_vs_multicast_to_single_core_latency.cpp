@@ -9,8 +9,8 @@
 #include <tt-metalium/device.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_cluster.hpp"
+#include <tt-metalium/metal_context.hpp>
+#include <tt-metalium/metal_context.hpp>
 
 using namespace tt;
 
@@ -18,11 +18,11 @@ void measure_latency(const string& kernel_name) {
     const int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    uint16_t channel = tt::tt_metal::MetalContext::get_cluster().get_assigned_channel_for_device(device->id());
     CoreCoord producer_logical_core =
-        tt_metal::dispatch_core_manager::instance().prefetcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::get_dispatch_core_manager().prefetcher_core(device->id(), channel, 0);
     CoreCoord consumer_logical_core =
-        tt_metal::dispatch_core_manager::instance().dispatcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
 
     TT_ASSERT(
         producer_logical_core != consumer_logical_core,

@@ -55,7 +55,7 @@ struct DeviceLocalShardedBufferTestConfig {
 };
 
 void skip_for_tg() {
-    if (tt::Cluster::instance().is_galaxy_cluster()) {
+    if (tt::tt_metal::MetalContext::get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP();
     }
 }

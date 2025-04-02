@@ -7,7 +7,7 @@
 #include <tt-metalium/fabric_host_interface.h>
 
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/metal_context.hpp>
 #include "test_common.hpp"
 
 namespace tt::tt_fabric {
@@ -33,7 +33,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -107,8 +107,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -195,7 +195,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -269,8 +269,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -303,7 +303,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -358,7 +359,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -423,8 +424,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -511,7 +512,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -576,8 +577,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -610,7 +611,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -665,7 +667,7 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -737,8 +739,8 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     receiver_buffer_data[0] = atomic_inc;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -825,7 +827,7 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -897,8 +899,8 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     receiver_buffer_data[0] = atomic_inc;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -931,7 +933,8 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -987,7 +990,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -1074,8 +1077,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1167,7 +1170,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -1254,8 +1257,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1288,7 +1291,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1348,7 +1352,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -1426,8 +1430,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     uint32_t atomic_inc = 5;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1519,7 +1523,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -1597,8 +1601,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     uint32_t atomic_inc = 5;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1631,7 +1635,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1694,7 +1699,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     auto routing_direction = RoutingDirection::E;
     mcast_hops[routing_direction] = 1;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
@@ -1770,7 +1775,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
             tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -1827,7 +1832,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -1916,7 +1921,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     auto routing_direction = RoutingDirection::E;
     mcast_hops[routing_direction] = 1;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
@@ -1995,7 +2000,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
             tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -2043,7 +2048,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -2133,7 +2138,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
     mcast_hops[RoutingDirection::E] = 1;
     mcast_hops[RoutingDirection::W] = 2;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
@@ -2214,7 +2219,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
             tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -2271,7 +2276,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
         receiver_buffer_data.begin());
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -2366,7 +2371,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     mcast_hops[RoutingDirection::E] = 1;
     mcast_hops[RoutingDirection::W] = 2;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
@@ -2447,7 +2452,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
             };
             auto receiver_buffer = CreateBuffer(receiver_shard_config);
             tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -2495,7 +2500,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);

@@ -40,7 +40,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
         ComputeConfig{});
 
     // Write runtime args
-    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 500000; // .5 secons
     const std::vector<uint32_t> args = { delay_cycles };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {

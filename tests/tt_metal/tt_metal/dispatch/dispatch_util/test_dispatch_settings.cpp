@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 #include "llrt/hal.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
-#include "tt_cluster.hpp"
+#include <tt-metalium/metal_context.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
@@ -32,7 +32,7 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
 }
 
 TEST(DispatchSettingsTest, TestDispatchSettingsDefaultUnsupportedCoreType) {
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     const auto unsupported_core = CoreType::ARC;
     EXPECT_THROW(DispatchSettings::get(unsupported_core, 1), std::runtime_error);
 }
@@ -44,7 +44,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMissingArgs) {
 
 TEST(DispatchSettingsTest, TestDispatchSettingsEq) {
     const uint32_t hw_cqs = 2;
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     auto settings_2 = settings; // Copy
     EXPECT_EQ(settings, settings_2);
@@ -57,7 +57,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchDBuffer) {
     const uint32_t expected_buffer_bytes = 0xcafe;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.prefetch_d_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_buffer_size_, expected_buffer_bytes);
@@ -68,7 +68,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * sizeof(DispatchSettings::prefetch_q_entry_type);
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
@@ -79,7 +79,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.dispatch_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_size_, expected_buffer_bytes);
@@ -91,7 +91,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchSBuffer) {
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.dispatch_s_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_size_, expected_buffer_bytes);
@@ -103,7 +103,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetTunnelerBuffer) {
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =
         expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto settings = DispatchSettings::get(CoreType::WORKER, hw_cqs);
     settings.tunneling_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.tunneling_buffer_size_, expected_buffer_bytes);
@@ -127,7 +127,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     const uint32_t prefetch_q_entries = 512;
     const uint32_t scratch_db_size = 5120;
 
-    DispatchSettings::initialize(tt::Cluster::instance());
+    DispatchSettings::initialize(tt::tt_metal::MetalContext::get_cluster());
     auto& settings = DispatchSettings::get(core_type, hw_cqs);
     DispatchSettings original_settings = settings;  // Copy the original to be restored later
 

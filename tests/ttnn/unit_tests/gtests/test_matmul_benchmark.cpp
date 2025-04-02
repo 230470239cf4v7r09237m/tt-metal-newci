@@ -29,7 +29,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/trace.hpp"
 
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/metal_context.hpp>
 
 std::string dtype_to_string(DataType dtype) {
     switch (dtype) {
@@ -350,7 +350,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
     double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
 
-    const int freq_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    const int freq_mhz = tt::tt_metal::MetalContext::get_cluster().get_device_aiclk(device->id());
     double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
 
     double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;

@@ -193,7 +193,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
         log_info(LogTest, "Running test on {}", device->id());
         EnqueueProgram(device->command_queue(), *program, false);
         Finish(device->command_queue());
-        tt::Cluster::instance().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::get_cluster().l1_barrier(device->id());
 
         for (const CoreCoord& core_coord : cr0) {
             const auto& virtual_core_coord = device->worker_core_from_logical_core(core_coord);

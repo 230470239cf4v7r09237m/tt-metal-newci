@@ -65,7 +65,7 @@ bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
 
     tt::tt_metal::detail::WriteToBuffer(buffer, input);
 
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::get_cluster().l1_barrier(device->id());
     std::vector<uint32_t> output;
     tt::tt_metal::detail::ReadFromBuffer(buffer, output);
     pass &= (output == input);
@@ -150,7 +150,7 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
         tt::tt_metal::detail::WriteToBuffer(buffer, input);
-        tt::Cluster::instance().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::get_cluster().l1_barrier(device->id());
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
             auto readback = tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer->address(), page_size);

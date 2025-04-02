@@ -86,7 +86,8 @@ std::vector<tt_metal::IDevice*> get_device_ring(std::vector<tt::tt_metal::IDevic
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
-        auto ethernet_connected_device_ids = tt::Cluster::instance().get_ethernet_connected_device_ids(device->id());
+        auto ethernet_connected_device_ids =
+            tt::tt_metal::MetalContext::get_cluster().get_ethernet_connected_device_ids(device->id());
         for (const auto& connected_device_id : ethernet_connected_device_ids) {
             for (uint32_t j = 0; j < devices.size(); ++j) {
                 if (devices[j]->id() == connected_device_id) {
