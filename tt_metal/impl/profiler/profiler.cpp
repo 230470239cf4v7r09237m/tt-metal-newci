@@ -121,7 +121,6 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
-            uint32_t runCounterRead = 0;
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
@@ -141,8 +140,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     // TODO(MO): Cleanup magic numbers
                     riscNumRead = profile_buffer[index] & 0x7;
                     coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
-                    runCounterRead = profile_buffer[index + 1] & 0xFFFF;
-                    runHostCounterRead = (profile_buffer[index + 1] >> 16) & 0xFFFF;
+                    runHostCounterRead = profile_buffer[index + 1];
 
                     opname = getOpNameIfAvailable(device_id, runHostCounterRead);
 
@@ -171,7 +169,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     riscNumRead,
                                     worker_core.x,
                                     worker_core.y,
-                                    runCounterRead);
+                                    runHostCounterRead);
                                 TT_ASSERT(
                                     coreFlatIDRead == coreFlatID,
                                     "Unexpected core id, expected {}, read {}. In core {},{} at run {}",
@@ -179,12 +177,11 @@ void DeviceProfiler::readRiscProfilerResults(
                                     coreFlatIDRead,
                                     worker_core.x,
                                     worker_core.y,
-                                    runCounterRead);
+                                    runHostCounterRead);
 
                                 logPacketData(
                                     log_file_ofs,
                                     noc_trace_json_log,
-                                    runCounterRead,
                                     runHostCounterRead,
                                     opname,
                                     device_id,
@@ -204,7 +201,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             logPacketData(
                                 log_file_ofs,
                                 noc_trace_json_log,
-                                runCounterRead,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -226,7 +222,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             logPacketData(
                                 log_file_ofs,
                                 noc_trace_json_log,
-                                runCounterRead,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -244,7 +239,6 @@ void DeviceProfiler::readRiscProfilerResults(
                             logPacketData(
                                 log_file_ofs,
                                 noc_trace_json_log,
-                                runCounterRead,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -281,7 +275,6 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
 void DeviceProfiler::logPacketData(
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log,
-    uint32_t run_id,
     uint32_t run_host_id,
     const std::string& opname,
     chip_id_t device_id,
@@ -392,7 +385,6 @@ void DeviceProfiler::logPacketData(
         t_id,
         timestamp,
         data,
-        run_id,
         run_host_id,
         opname,
         zone_name,
@@ -410,7 +402,6 @@ void DeviceProfiler::logPacketData(
         t_id,
         timestamp,
         data,
-        run_id,
         run_host_id,
         opname,
         zone_name,
@@ -428,7 +419,6 @@ void DeviceProfiler::logPacketDataToCSV(
     uint32_t timer_id,
     uint64_t timestamp,
     uint64_t data,
-    uint32_t run_id,
     uint32_t run_host_id,
     const std::string_view opname,
     const std::string_view zone_name,
@@ -443,7 +433,7 @@ void DeviceProfiler::logPacketDataToCSV(
     }
 
     log_file_ofs << fmt::format(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         device_id,
                         core_x,
                         core_y,
@@ -451,7 +441,6 @@ void DeviceProfiler::logPacketDataToCSV(
                         timer_id,
                         timestamp,
                         data,
-                        run_id,
                         run_host_id,
                         zone_name,
                         magic_enum::enum_name(packet_type),
@@ -470,7 +459,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     uint32_t timer_id,
     uint64_t timestamp,
     uint64_t data,
-    uint32_t run_id,
     uint32_t run_host_id,
     const std::string_view opname,
     const std::string_view zone_name,
@@ -484,7 +472,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                                                        ? tracy::TTDeviceEventPhase::end
                                                        : tracy::TTDeviceEventPhase::begin;
             noc_trace_json_log.push_back(nlohmann::ordered_json{
-                {"run_id", run_id},
                 {"run_host_id", run_host_id},
                 {"op_name", opname},
                 {"proc", risc_name},
@@ -500,7 +487,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
         KernelProfilerNocEventMetadata ev_md(data);
 
         nlohmann::ordered_json data = {
-            {"run_id", run_id},
             {"run_host_id", run_host_id},
             {"op_name", opname},
             {"proc", risc_name},
