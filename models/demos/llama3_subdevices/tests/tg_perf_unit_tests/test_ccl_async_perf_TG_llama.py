@@ -144,7 +144,7 @@ def test_fused_all_gather_concat_perf(
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse -k {ar_type}"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherConcat"
-    warmup_iters = warmup_iters * 4  # 5 iterations per device
+    warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
     profiler.start(step_name)
