@@ -47,10 +47,11 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       LOGURU_LEVEL: INFO
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - in-service
-      - cloud-virtual-machine
+    runs-on: >-
+      ${{
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
