@@ -115,7 +115,7 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
+          # push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline

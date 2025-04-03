@@ -79,19 +79,19 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64" # ${{ needs.build-artifact.outputs.dev-docker-image }}
 
 
-  find-changed-files:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-latest
-    outputs:
-      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
-      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
-      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
-    steps:
-      - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+  # find-changed-files:
+  #   if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+  #     tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+  #     tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+  #   steps:
+  #     - id: find-changes
+  #       uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
   smoke-tests:
     needs: [ build, find-changed-files ]
