@@ -114,24 +114,24 @@ jobs:
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
-  workflow-status:
-    name: PR Gate Status
-    # Force this job to run so GH can 'see' it, provided some other job has actually run.
-    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
-    # report FAILED instead of SKIPPED.
-    if: >-
-      ${{
-        always() &&
-        contains(join(needs.*.result, ','), 'success') ||
-        contains(join(needs.*.result, ','), 'failure')
-      }}
-    needs: [build, smoke-tests]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
-        with:
-          required-jobs: "build"
-          optional-jobs: "smoke-tests"
-        env:
-          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
+  # workflow-status:
+  #   name: PR Gate Status
+  #   # Force this job to run so GH can 'see' it, provided some other job has actually run.
+  #   # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
+  #   # report FAILED instead of SKIPPED.
+  #   if: >-
+  #     ${{
+  #       always() &&
+  #       contains(join(needs.*.result, ','), 'success') ||
+  #       contains(join(needs.*.result, ','), 'failure')
+  #     }}
+  #   needs: [build, smoke-tests]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Check if all jobs passed
+  #       uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
+  #       with:
+  #         required-jobs: "build"
+  #         optional-jobs: "smoke-tests"
+  #       env:
+  #         NEEDS_CONTEXT: '${{ toJSON(needs) }}'
