@@ -50,7 +50,7 @@ env:
 
 jobs:
   check-docker-images:
-    runs-on: ubuntu-latest
+    runs-on: tt-beta-ubuntu-2204-large
     outputs:
       # ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
       # ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
@@ -97,9 +97,7 @@ jobs:
     needs: check-docker-images
     if: needs.check-docker-images.outputs.dev-exists != 'true'
     timeout-minutes: 30
-    runs-on:
-      - build-docker
-      - in-service
+    runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Login to GitHub Container Registry
@@ -128,7 +126,7 @@ jobs:
     name: "🔄 Update latest tag"
     needs: check-docker-images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
