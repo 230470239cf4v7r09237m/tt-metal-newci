@@ -157,6 +157,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
+      - name: Sleep infinitiy
+        run: sleep infinity
       - name: Check Redis credentials
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
